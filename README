@@ -1,7 +1,12 @@
-Benchmark
+Benchmark design document
+
 
 Purpose: run programs under particular platforms, measuring runtime
 and making sure the output is correct.
+
+----------------------------------------------------------------------
+
+I need a few definitions.
 
 
 
@@ -10,15 +15,16 @@ A platform is:
    * js-vm
    * original sicp compiler
    * my revised sicp compiler (using the Racket machine structures)
-   * raw racket
+   * racket from the command line
 
 
 We also need to take into account the effect of the machine that
-we're running on.  Let's call this a host.
+we're running on.  Let's call this a _host_.
 
 
-A host is a string that describes the machine we're on.
-e.g. "Intel(R) Core(TM)2 Quad CPU Q6600 @ 2.40GHz"
+A _host_ is a string that describes the machine we're on.
+e.g. "Intel(R) Core(TM)2 Quad CPU Q6600 @ 2.40GHz".  get-host-info.rkt
+will grab this for Linux systems.
 
 
 
@@ -32,7 +38,7 @@ A measurement has:
    A host machine
    A platform
    A program
-   A time
+   A time-taken in milliseconds
    An output
 
 
@@ -41,20 +47,76 @@ A program suite is a directory of programs.  That directory should
 include source code, named "program0", "program1", ..., "programN".
 If there's some shared code between each program run, it should be
 included in a "shared" file.  The expected output should be in a file
-called "expected".
+called "expected*".
+
+
+######################################################################
+
+Sample directory structure:
+
+    suite1/
+    suite1/shared
+    suite1/program0
+    suite1/program1
+    suite1/expected0
+    suite1/expected1
+
+with the following contents:
+
+    shared
+    ----
+    (define (sum n)
+      (if (= n 0)
+          0
+          (+ n (sum (sub1 n)))))
+
+
+
 
     program0
+    --------
+    (display (sum 1000))
+
+
     program1
-    program2
-    ...
-    shared
+    --------
+    (display (sum 10000))
+
+
+    expected0
+    ---------
+    500500
+
+
+    expected1
+    ---------
+    50005000
+
+######################################################################
+
+Each of the programs+shared should be written in a simplified Scheme
+sublanguage to make it easy for adapting to different platforms.
+
+
 
 
 
 A platform should be able to _run_ a program.  A program may need to
-adapt a program to run under it.
+adapt a program to run under it.  A platform, then provides the
+following:
+
+   run: [program-path path] [shared-path path] [suite-directory path] -> (values [output string] [time-taken inexact-real])
+
+I don't want to resort to the unit system for this, do I?
 
 
 
-Each of the programs+shared should be written in a simplified Scheme
-sublanguage to make it easy for adapting to different platforms.
+The reason why I want to pass in the suite directory is because the
+suite may include files specific to the platform for doing the
+adaptation.
+
+
+
+
+One assumption I'm making is that a program always terminates.  Can
+this be a problem?
