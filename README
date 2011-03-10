@@ -1,0 +1,60 @@
+Benchmark
+
+Purpose: run programs under particular platforms, measuring runtime
+and making sure the output is correct.
+
+
+
+A platform is:
+
+   * js-vm
+   * original sicp compiler
+   * my revised sicp compiler (using the Racket machine structures)
+   * raw racket
+
+
+We also need to take into account the effect of the machine that
+we're running on.  Let's call this a host.
+
+
+A host is a string that describes the machine we're on.
+e.g. "Intel(R) Core(TM)2 Quad CPU Q6600 @ 2.40GHz"
+
+
+
+An _output_ is the textual content captured from standard output and
+standard error.
+
+
+A measurement has:
+
+   A date when the measurement was taken.
+   A host machine
+   A platform
+   A program
+   A time
+   An output
+
+
+
+A program suite is a directory of programs.  That directory should
+include source code, named "program0", "program1", ..., "programN".
+If there's some shared code between each program run, it should be
+included in a "shared" file.  The expected output should be in a file
+called "expected".
+
+    program0
+    program1
+    program2
+    ...
+    shared
+
+
+
+A platform should be able to _run_ a program.  A program may need to
+adapt a program to run under it.
+
+
+
+Each of the programs+shared should be written in a simplified Scheme
+sublanguage to make it easy for adapting to different platforms.
