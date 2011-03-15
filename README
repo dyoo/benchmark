@@ -12,9 +12,15 @@ I need a few definitions.
 
 A platform is:
 
-   * js-vm
+   * old moby
+
+   * current js-vm
+
    * original sicp compiler
+
    * my revised sicp compiler (using the Racket machine structures)
+       - both the simulator and the javascript evaluation
+
    * racket from the command line
 
 
