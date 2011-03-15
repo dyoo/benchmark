@@ -1,0 +1,62 @@
+Summary
+
+    js-vm (formerly mzscheme-vm): an implementation of the Racket VM
+    in Javascript.
+
+
+
+Prerequisites:
+
+    * mzscheme 5.0.1
+        use mzscheme 5.0.1, as the VM may change from version to version.
+
+##################################################
+Installation:
+
+    1.  Check out the git repository.
+
+        $ git clone git://github.com/dyoo/mzscheme-vm.git
+
+
+    2.  Check out the submodules within the git repository.
+
+        $ cd mzscheme-vm
+        $ git submodule init
+        $ git submodule update
+
+##################################################
+Running core opcode tests:
+
+    $ cd tests/unit-tests
+    $ ./run-tests
+
+
+Running mz-tests basic test suite
+
+    $ cd tests/mz-tests
+    $ racket ../../mzjs.rkt basic.rktl
+    $ google-chrome basic/index.html
+
+Another set of tests:
+
+   $ cd tests/moby-programs
+   $ racket ../../mzjs.rkt all-tests.rkt
+   $ google-chrome all-tests/index.html
+
+
+
+######################################################################
+
+
+Contributors: the following folks have helped to implement
+mzscheme-vm:
+
+   * Ethan Cecchetti
+
+   * Scott Newman
+
+   * Zhe Zhang
+
+   * Shriram Krishnamurthi
+
+   * Emmanuel Schanzer

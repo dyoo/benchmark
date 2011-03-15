@@ -1,0 +1,50 @@
+Here are deviations from the wescheme language to ASL:
+    (described in http://docs.racket-lang.org/htdp-langs/advanced.html?q=advanced)
+
+----------------------------------------------------------------------
+
++, *, / don't take at least two arguments.
+
+and, or don't require at least two arguments
+
+set! allowed on function arguments
+
+syntactic keywords can be used as variable names
+
+
+missing primitives: 
+
+    :
+    define-datatype,
+    match,
+    delay,
+    check-member-of,
+    check-range,
+    check-error,
+    exit,
+    force,
+    gensym,
+    promise,
+    pretty-print
+    print
+    read
+    with-input-from-file
+    with-input-from-string
+    with-output-to-file
+    with-output-to-string
+
+    hash-copy
+    hash-count
+    hash-eq?
+    hash-equal?
+    hash-eqv?
+    hash-has-key?
+    hash-ref!
+    hash-update!
+    make-hasheqv
+    make-immutable-hash
+    make-immutable-hasheq
+    make-immutable-hasheqv
+
+displayed output not exactly the same with regards to shared values
+and constructor output
