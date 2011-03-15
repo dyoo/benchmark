@@ -28,11 +28,8 @@
                   (call-with-input-file* desugared-path read*)]
                  [else
                   (call-with-input-file* 
-                      (build-path suite-directory (format "~a.rkt" module-name))
-                    (lambda (inp)
-                      (syntax-case (read-syntax #f inp) ()
-                        [(module name lang (#%module-begin body ...))
-                         (syntax->datum #'(body ...))])))]))])
+                      (build-path suite-directory (format "~a.sch" module-name))
+		      read*)]))])
     (parameterize ([current-directory suite-directory])
       (let* ([result (evaluate program)])
         (make-measurement (current-seconds)
