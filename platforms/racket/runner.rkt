@@ -5,13 +5,14 @@
 
 (provide run)
 
-;; run: suite-path program-path 
+;; run: suite-path module-name -> measurement 
 (define (run suite-directory module-name)
   (let ([op (open-output-string)]
         [start-time #f])
     (parameterize ([current-directory suite-directory]
                    [current-namespace (make-base-namespace)]
-                   [current-output-port op])
+                   [current-output-port op]
+                   [read-accept-reader #t])
       (eval (read-syntax module-name (open-input-file (format "~a.rkt" module-name))))
       (set! start-time (current-inexact-milliseconds))
       (dynamic-require `',module-name #f))

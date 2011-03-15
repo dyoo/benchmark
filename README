@@ -51,9 +51,7 @@ A measurement has:
 
 A program suite is a directory of programs.  That directory should
 include source code, named "program0", "program1", ..., "programN".
-If there's some shared code between each program run, it should be
-included in a "shared" file.  The expected output should be in a file
-called "expected*".
+The expected output should be in a file called "expected*".
 
 
 ######################################################################
@@ -61,31 +59,31 @@ called "expected*".
 Sample directory structure:
 
     suite1/
-    suite1/shared
-    suite1/program0
-    suite1/program1
+    suite1/program0.rkt
+    suite1/program1.rkt
     suite1/expected0
     suite1/expected1
 
 with the following contents:
 
-    shared
-    ----
+
+    program0
+    --------
+    #lang racket
     (define (sum n)
       (if (= n 0)
           0
           (+ n (sum (sub1 n)))))
-
-
-
-
-    program0
-    --------
     (display (sum 1000))
 
 
     program1
     --------
+    #lang racket
+    (define (sum n)
+      (if (= n 0)
+          0
+          (+ n (sum (sub1 n)))))
     (display (sum 10000))
 
 
@@ -100,10 +98,10 @@ with the following contents:
 
 ######################################################################
 
-Each of the programs+shared should be written in a simplified Scheme
-sublanguage to make it easy for adapting to different platforms.
-
-
+Each program may have a "...-desugared.sch" version.  If that exists,
+then a platform may use that.  It's expected that such a file will be
+in a simplified Scheme sublanguage to make it easy for adapting to
+different platforms.
 
 
 
@@ -111,18 +109,10 @@ A platform should be able to _run_ a program.  A program may need to
 adapt a program to run under it.  A platform, then provides the
 following:
 
-   run: [program-path path] [shared-path path] [suite-directory path] -> (values [output string] [time-taken inexact-real])
-
-I don't want to resort to the unit system for this, do I?
+   run: [suite-directory path] [module-name symbol] -> measurement
 
 
 
 The reason why I want to pass in the suite directory is because the
 suite may include files specific to the platform for doing the
 adaptation.
-
-
-
-
-One assumption I'm making is that a program always terminates.  Can
-this be a problem?
