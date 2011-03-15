@@ -503,5 +503,4 @@
           (if (equal? (test) result) (display '" ok.") (display '" um."))
           (newline))))))
 
-
-(void ((letrec ((loop (lambda (n) (if (zero? n) 'done (begin (go) (loop (- n '1))))))) loop) '10))
+(void ((letrec ((loop (lambda (n) (if (zero? n) 'done (begin (go) (loop (- n '1))))))) loop) 10))
