@@ -25,11 +25,11 @@
          (let ([desugared-path 
                 (build-path suite-directory (format "~a-desugared.sch" module-name))])
            (cond [(file-exists? desugared-path)
-                  (call-with-input-file* desugared-path read*)]
+                  (cons 'begin (call-with-input-file* desugared-path read*))]
                  [else
-                  (call-with-input-file* 
-                      (build-path suite-directory (format "~a.sch" module-name))
-		      read*)]))])
+                  (cons 'begin (call-with-input-file* 
+                                   (build-path suite-directory (format "~a.sch" module-name))
+                                 read*))]))])
     (parameterize ([current-directory suite-directory])
       (let* ([result (evaluate program)])
         (make-measurement (current-seconds)

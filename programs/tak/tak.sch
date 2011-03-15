@@ -19,8 +19,8 @@
            (tak (- z 1) x y))))
  
 ;;; call: (tak 18 12 6)
-
-(let loop ((n 15000) (v 0))
-  (if (zero? n)
-      (begin (display v) (newline))
-      (loop (- n 1) (tak 18 12 6))))
+(letrec ([loop (lambda (n v)
+		 (if (zero? n)
+		     (begin (display v) (newline))
+		     (loop (- n 1) (tak 18 12 6))))])
+  (loop 1500 0))
