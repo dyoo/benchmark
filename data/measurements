@@ -10,3 +10,5 @@
 ((current-date 1300306052 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program gauss-iter) (platform "racket") (time 76.94287109375) (output "50005000\n"))
 ((current-date 1300306085 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program gauss-iter) (platform "browser:Chrome 8/Linux") (time 32696) (output "50005000\n"))
 ((current-date 1300306096 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program cpstack) (platform "racket") (time 6669.383056640625) (output "3\n"))
+((current-date 1300306975 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program cpstack) (platform "browser:Chrome 8/Linux") (time 879333) (output "3\n"))
+((current-date 1300306979 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program tak) (platform "racket") (time 1004.924072265625) (output "7\n"))
