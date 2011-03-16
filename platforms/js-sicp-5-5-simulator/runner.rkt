@@ -1,12 +1,33 @@
 #lang racket/base
 (require "../../measurement-struct.rkt"
          "../../get-host-info.rkt"
-         "../../externals/js-sicp-5-5/browser-evaluate.rkt"
-         "../../externals/js-sicp-5-5/package.rkt")
+         "../../externals/js-sicp-5-5/simulator.rkt"
+         "../../externals/js-sicp-5-5/parse.rkt"
+         "../../externals/js-sicp-5-5/compile.rkt"
+         "../../externals/js-sicp-5-5/simulator-structs.rkt")
 
-(define evaluate (make-evaluate package-anonymous))
 
 (provide run)
+
+
+(define (evaluate program)
+  (let ([op (open-output-string)])
+    (parameterize ([current-simulated-output-port op])
+      (values (machine-val (step-to-completion 
+			    (new-machine 
+			     (compile (parse program) 'val 'next))))
+	      (get-output-string op)))))
+  
+
+;; Run the machine to completion.
+(define (step-to-completion m)
+  (cond
+    [(can-step? m)
+     (step! m)
+     (step-to-completion m)]
+    [else
+     m]))
+
 
 (define (read* inp)
   (parameterize ([read-accept-reader #t])
@@ -31,10 +52,10 @@
                                    (build-path suite-directory (format "~a.sch" module-name))
                                  read*))]))])
     (parameterize ([current-directory suite-directory])
-      (let* ([result (evaluate program)])
+      (let-values ([(result stdout) (evaluate program)])
         (make-measurement (current-seconds)
                           (get-host-info)
                           "racket"
                           module-name
-                          (evaluated-t result)
-                          (evaluated-stdout result))))))
+                          result
+                          stdout)))))
