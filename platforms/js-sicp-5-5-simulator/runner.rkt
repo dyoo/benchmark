@@ -13,18 +13,20 @@
 (define (evaluate program)
   (let ([op (open-output-string)])
     (parameterize ([current-simulated-output-port op])
-      (values (machine-val (step-to-completion 
-			    (new-machine 
-			     (compile (parse program) 'val 'next))))
-	      (get-output-string op)))))
+      (let* ([code (compile (parse program) 'val 'next)]
+	     [machine (new-machine code)])
+	(let ([start-time (current-inexact-milliseconds)])
+	  (step-to-completion! machine)
+	  (values (- (current-inexact-milliseconds) start-time)
+		  (get-output-string op)))))))
   
 
 ;; Run the machine to completion.
-(define (step-to-completion m)
+(define (step-to-completion! m)
   (cond
     [(can-step? m)
      (step! m)
-     (step-to-completion m)]
+     (step-to-completion! m)]
     [else
      m]))
 
@@ -52,9 +54,9 @@
                                    (build-path suite-directory (format "~a.sch" module-name))
                                  read*))]))])
     (parameterize ([current-directory suite-directory])
-      (let-values ([(result stdout) (evaluate program)])
+      (let-values ([(time stdout) (evaluate program)])
         (make-measurement (current-seconds)
                           "simulator"
                           module-name
-                          result
+                          time
                           stdout)))))

@@ -1,6 +1,8 @@
 #lang racket/base
 
-(require "save-measurements.rkt")
+(require "save-measurement.rkt"
+	 racket/runtime-path
+	 racket/list)
 
 
 (require (prefix-in racket: "platforms/racket/runner.rkt"))
@@ -8,11 +10,22 @@
 (require (prefix-in simulator: "platforms/js-sicp-5-5-simulator/runner.rkt"))
 
 
-#;(racket:run "programs/cpstack" 'cpstack))
-#;(simulator:run "programs/cpstack" 'cpstack)
-#;(browser:run "programs/cpstack" 'cpstack)
+(define-runtime-path this-path ".")
+
+(define programs '(("programs/gauss" gauss)
+		   #;("programs/cpstack" cpstack)
+		   #;("programs/tak" tak)
+		   ))
 
 
-#;(racket:run "programs/tak" 'tak)
-#;(simulator:run "programs/tak" 'tak)
-#;(browser:run "programs/tak" 'tak)
+(for ([p programs])
+  (let ([dir (first p)]
+	[module-name (second p)])
+    (printf "Running ~a benchmark...\n" module-name)
+    (parameterize ([current-directory this-path])
+      (printf "    racket...\n")
+      (save-measurement! (racket:run dir module-name))
+      #;(printf "    simulator...\n")
+      #;(save-measurement! (simulator:run dir module-name))
+      (printf "    browser...\n")
+      (save-measurement! (browser:run dir module-name)))))

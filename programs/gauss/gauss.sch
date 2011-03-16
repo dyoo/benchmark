@@ -6,5 +6,5 @@
 (letrec ([loop (lambda (n v)
 		 (if (zero? n)
 		     (begin (display v) (newline))
-		     (loop (- n 1) (gauss 10000))))])
+		     (loop (- n 1) (gauss 1000))))])
   (loop 1500 0))

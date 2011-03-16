@@ -3,7 +3,9 @@
 (require "measurement-struct.rkt"
 	 "get-host-info.rkt"
 	 racket/match
-	 racket/runtime-path)
+	 racket/runtime-path
+	 racket/list
+	 racket/date)
 
 (provide save-measurement!)
 
@@ -18,8 +20,10 @@
 			  program
 			  time
 			  output))
-     `((current-date ,current-seconds)
-       (host-name ,(lookup-host-name))
+     `((current-date ,current-seconds 
+                     ,(date->string (seconds->date current-seconds)))
+       (host-name ,(second (lookup-host-name)))
+       (program ,program)
        (platform ,platform)
        (time ,time)
        (output , output))]))
