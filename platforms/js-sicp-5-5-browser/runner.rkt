@@ -33,8 +33,7 @@
     (parameterize ([current-directory suite-directory])
       (let* ([result (evaluate program)])
         (make-measurement (current-seconds)
-                          (get-host-info)
-                          "racket"
+                          "browser"
                           module-name
                           (evaluated-t result)
                           (evaluated-stdout result))))))

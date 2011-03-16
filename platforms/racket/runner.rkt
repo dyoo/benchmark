@@ -18,7 +18,6 @@
       (dynamic-require `',module-name #f))
     (let ([end-time (current-inexact-milliseconds)])
       (make-measurement (current-seconds)
-                        (get-host-info)
                         "racket"
                         module-name
                         (- end-time start-time)

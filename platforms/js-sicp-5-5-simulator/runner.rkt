@@ -54,8 +54,7 @@
     (parameterize ([current-directory suite-directory])
       (let-values ([(result stdout) (evaluate program)])
         (make-measurement (current-seconds)
-                          (get-host-info)
-                          "racket"
+                          "simulator"
                           module-name
                           result
                           stdout)))))
