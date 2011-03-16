@@ -13,6 +13,7 @@
 (define-runtime-path this-path ".")
 
 (define programs '(("programs/gauss" gauss)
+		   ("programs/gauss-iter" gauss-iter)
 		   #;("programs/cpstack" cpstack)
 		   #;("programs/tak" tak)
 		   ))

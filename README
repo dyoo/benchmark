@@ -1,3 +1,23 @@
+Benchmarks:
+
+
+To run:
+
+   racket run-benchmarks.rkt
+
+On an initial run, the program may detect that the benchmarks are being run
+on a new machine.  If so, it'll prompt for a name to give this configuration.
+
+Measurements will be stored in data/measurements.
+
+
+
+
+======================================================================
+
+
+
+
 Benchmark design document
 
 

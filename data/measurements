@@ -1,0 +1,6 @@
+((current-date 1300305151 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program gauss) (platform "racket") (time 147.194091796875) (output "50005000\n"))
+((current-date 1300305184 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program gauss) (platform "browser:Chrome 8/Linux") (time 32705) (output "50005000\n"))
+((current-date 1300305425 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program gauss) (platform "racket") (time 191.654052734375) (output "50005000\n"))
+((current-date 1300305457 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program gauss) (platform "browser:Chrome 8/Linux") (time 32426) (output "50005000\n"))
+((current-date 1300305458 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program gauss-iter) (platform "racket") (time 77.27197265625) (output "50005000\n"))
+((current-date 1300305492 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program gauss-iter) (platform "browser:Chrome 8/Linux") (time 34022) (output "50005000\n"))

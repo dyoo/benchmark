@@ -33,7 +33,7 @@
     (parameterize ([current-directory suite-directory])
       (let* ([result (evaluate program)])
         (make-measurement (current-seconds)
-                          "browser"
+                          (format "browser:~a" (evaluated-browser result))
                           module-name
                           (evaluated-t result)
                           (evaluated-stdout result))))))
