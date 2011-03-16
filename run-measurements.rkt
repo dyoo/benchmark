@@ -14,8 +14,8 @@
 
 (define programs '(("programs/gauss" gauss)
 		   ("programs/gauss-iter" gauss-iter)
-		   #;("programs/cpstack" cpstack)
-		   #;("programs/tak" tak)
+		   ("programs/cpstack" cpstack)
+		   ("programs/tak" tak)
 		   ))
 
 
@@ -26,7 +26,7 @@
     (parameterize ([current-directory this-path])
       (printf "    racket...\n")
       (save-measurement! (racket:run dir module-name))
-      #;(printf "    simulator...\n")
-      #;(save-measurement! (simulator:run dir module-name))
+      (printf "    simulator...\n")
+      (save-measurement! (simulator:run dir module-name))
       (printf "    browser...\n")
       (save-measurement! (browser:run dir module-name)))))
