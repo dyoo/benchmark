@@ -16,6 +16,7 @@
 		   ("programs/gauss-iter" gauss-iter)
 		   ("programs/cpstack" cpstack)
 		   ("programs/tak" tak)
+		   ("programs/conform" conform)
 		   ))
 
 
