@@ -12,3 +12,4 @@
 ((current-date 1300306096 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program cpstack) (platform "racket") (time 6669.383056640625) (output "3\n"))
 ((current-date 1300306975 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program cpstack) (platform "browser:Chrome 8/Linux") (time 879333) (output "3\n"))
 ((current-date 1300306979 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program tak) (platform "racket") (time 1004.924072265625) (output "7\n"))
+((current-date 1300307200 "Wednesday, March 16th, 2011") (host-name "ilab-machine") (program tak) (platform "browser:Chrome 8/Linux") (time 221178) (output "7\n"))
