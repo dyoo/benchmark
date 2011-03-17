@@ -65,7 +65,9 @@
 (let loop ([hosts (read-known-hosts)])
   (cond
    [(empty? hosts)
-    (printf "Registering new host in ~a.\n" (path->string known-hosts))
+    (printf "Registering new host ~s in ~a.\n" 
+	    (get-host-name)
+	    (path->string known-hosts))
     (register-new-host! (get-host-name))]
    [(string=? (second (first hosts))
 	      (get-host-name))
