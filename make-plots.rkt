@@ -39,11 +39,33 @@ EOF
 
 (define-runtime-path measurements "data/measurements")
 
+
+(define SECONDS-IN-A-DAY
+  (* 24 ;; hours
+     60 ;; minutes per hour
+     60 ;; seconds per minute
+     ))
+
+
 (define-struct data-point (date hostname program platform time)
   #:transparent)
 
 (define data-points 
   (let ()
+    (define (switch-to-day-number points)
+      (let ([first-second 
+             (apply min (map date->seconds (map data-point-date points)))])
+        (map (lambda (point)
+               (match point
+                 [(struct data-point (date hostname program platform time))
+                  (make-data-point (quotient (- (date->seconds date) first-second)
+                                             SECONDS-IN-A-DAY)
+                   hostname 
+                   program
+                   platform 
+                   time)]))
+             points)))
+     
     
     (define (sexp->data-point sexp)
       (match sexp
@@ -81,7 +103,8 @@ EOF
            (cons (sexp->data-point next) 
                  (read* ip))])))
     
-    (call-with-input-file measurements read*)))
+    (switch-to-day-number
+     (call-with-input-file measurements read*))))
 
 
 ;; unique: (listof string) -> (listof string)
@@ -110,15 +133,8 @@ EOF
                                 program-name))
           pts))
 
-;; date-point-year-month-day: data-point -> (list number number number)
-(define (data-point-year-month-day a-data-point)
-  (let ([date (data-point-date a-data-point)])
-    (list (date-year date)
-          (date-month date)
-          (date-day date))))
-         
 
-(define cluster-datapoints-by-day (cluster data-points data-point-year-month-day))
+(define cluster-datapoints-by-day (cluster data-points data-point-date))
 
 
 
