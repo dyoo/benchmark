@@ -2,9 +2,7 @@
 
 (require racket/port
 	 racket/runtime-path
-	 racket/list
-
-	 mzlib/os)
+	 racket/list)
 
 
 (provide get-host-info
@@ -30,7 +28,7 @@
    [(file-exists? this-host)
     (call-with-input-file this-host read-line)]
    [else
-    (gethostname)]))
+    (error 'get-host-name "benchmark hasn't been configured to know about this machine.  Try $ hostname>~s, and try again." (path->string this-host))]))
 
 
 
