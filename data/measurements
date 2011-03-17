@@ -48,3 +48,6 @@
 ((current-date 1300394093 "Thursday, March 17th, 2011") (host-name "ilab-machine") (program gauss-iter) (platform "js-vm:Chrome 8/Linux") (time 762957) (output "50005000\n"))
 ((current-date 1300394127 "Thursday, March 17th, 2011") (host-name "ilab-machine") (program gauss-iter) (platform "browser:Chrome 8/Linux") (time 33894) (output "50005000\n"))
 ((current-date 1300394141 "Thursday, March 17th, 2011") (host-name "ilab-machine") (program cpstack) (platform "racket") (time 6996.8818359375) (output "3\n"))
+((current-date 1300397623 "Thursday, March 17th, 2011") (host-name "ilab-machine") (program test) (platform "js-vm:Chrome 8/Linux") (time 99) (output "1461501637330902918203684832716283019655932542976\n"))
+((current-date 1300397666 "Thursday, March 17th, 2011") (host-name "ilab-machine") (program test) (platform "racket") (time 7.471923828125) (output "1461501637330902918203684832716283019655932542976\n"))
+((current-date 1300397666 "Thursday, March 17th, 2011") (host-name "ilab-machine") (program test) (platform "racket") (time 101.411865234375) (output "1461501637330902918203684832716283019655932542976\n"))
