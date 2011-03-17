@@ -1,9 +1,11 @@
 #lang racket/base
 
-(require racket/runtime-path)
+(require racket/runtime-path
+         racket/match
+         racket/date
+         "measurement-struct.rkt")
 
 (define plots-path "data/plots")
-
 
 
 (define template #<<EOF
@@ -19,13 +21,15 @@
 EOF
   )
 
-
 (define (make-graph-link name)
   (let ([graph-text #<<EOF
-    <iframe src="plots/~a.html"></iframe>
+    <div>
+    <h1>~a</h1>
+    <iframe src="~a.html" width="300" height="200"></iframe>
+    </div>
 EOF
                     ])
-    (format graph-text name)))
+    (format graph-text name name)))
 
 
 (define (make-plot name)
@@ -47,11 +51,10 @@ EOF
   </script>
   </head>
   <body onload="loadAllGraphs()">
-    <h2>~a</h2>
     <form action='https://chart.googleapis.com/chart' method='POST' id='post_form'
           onsubmit="this.action = 'https://chart.googleapis.com/chart?chid=' + (new Date()).getMilliseconds(); return true;">
       <input type='hidden' name='cht' value='lc'/>
-      <input type='hidden' name='chtt' value='This is | my chart'/>
+      <input type='hidden' name='chtt' value=~s/>
       <input type='hidden' name='chs' value='300x200'/>
       <input type='hidden' name='chxt' value='x'/>
       <input type='hidden' name='chd' value='t:40,20,50,20,100'/>
@@ -65,20 +68,62 @@ EOF
 
 
 
+(define-runtime-path measurements "data/measurements")
 
+(define-struct data-point (current-seconds hostname program platform time)
+  #:transparent)
+
+(define data-points 
+  (let ()
+    (define (sexp->data-point sexp)
+      (match sexp
+        [(list (list 'current-date seconds readable-date)
+               (list 'host-name host-name)
+               (list 'program program)
+               (list 'platform platform)
+               (list 'time time)
+               (list 'output output))
+         ;; omit output
+         (make-data-point (seconds->date seconds) host-name (format "~a" program) platform time)]))
+    
+    (define (read* ip)
+      (let ([next (read ip)])
+        (cond
+          [(eof-object? next)
+           '()]
+          [else
+           (cons (sexp->data-point next) 
+                 (read* ip))])))
+    
+    (call-with-input-file measurements read*)))
+
+
+
+(define (unique strs)
+  (define ht (make-hash))
+  (for ([s strs]) (hash-set! ht s #t))
+  (sort (for/list ([k (in-hash-keys ht)]) k)
+        string<?))
+
+
+
+(define all-program-names (unique (map data-point-program data-points)))
+(define all-platform-names (unique (map data-point-platform data-points)))
+
+
+
+;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 (call-with-output-file (build-path plots-path "index.html")
   (lambda (op)
     (display (format template 
                      (apply string-append
                             (map make-graph-link
-                                 '("test"))))
+                                 all-program-names)))
              op))
   #:exists 'replace)
 
-
-
-(for ([program-name '("test")])
+(for ([program-name all-program-names])
   (call-with-output-file (build-path plots-path (format "~a.html" program-name))
     (lambda (op)
       (display (make-plot program-name) op))
