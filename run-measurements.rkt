@@ -1,5 +1,20 @@
 #lang racket/base
 
+;; Command line program.  Run benchmarks on different platforms.
+;;
+;; If called with no command line arguments, applies the entire suite.
+;;
+;; Otherwise:
+;;
+;;     The first arugment is the platform [racket, browser, simulator, js-vm]
+;;     The rest of the arguments are the tests to run.
+;;
+;; The tests are: [test, gauss, gauss-iter, cpstack, tak, conform] 
+;; with more tests to come.
+;;
+;; Measurements are written to data/measurements.
+
+
 (require "save-measurement.rkt"
 	 racket/runtime-path
 	 racket/list)
