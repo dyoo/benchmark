@@ -1,9 +1,7 @@
 #lang racket/base
 (require "private/private/write-runtime.rkt"
          "private/private/write-module-records.rkt"
-         "private/private/module-record.rkt"
          "private/private/compile-moby-module.rkt"
-         "../../utils.rkt"
          "../../browser-evaluate.rkt"
          "../../measurement-struct.rkt"
          racket/port
@@ -71,30 +69,39 @@ EOF
 
 
 
-(define (generate-javascript-and-run program op)
-  (void)
-  #;(let* ([empty-module-record
-          (compile-plain-racket-module )]
-         
-         [interaction-record 
-          (compile-interaction `(file ,(path->string wescheme-interaction-language-module))
-                               (datum->syntax #f program))]
-         [code
-          (encode-interaction-record interaction-record)])
-      
-  
-  (printf "I see ~a" program)
-  
-  (fprintf op "(function() {")
-  
-  (write-module-records module-records op)
-  
-  
-  (fprintf op "})")))
+(define (generate-javascript-and-run program-stx op)
+  (let ([template #<<EOF
+(function() {
+    var emptyModule = ~a;
+    var interaction = ~a;
+    var evaluator = new Evaluator();
+    return function(success, fail, params) {
+
+        evaluator.write = function(v) { params.currentDisplayer(String(v)) };
+
+        evaluator.executeCompileProgram(
+            emptyModule.bytecode,
+            function(prefix) {
+                evaluator.absorbPrefixIntoNamespace(prefix);
+                evaluator.executeCompiledProgram(
+                    interaction.bytecode,
+                    function(dontCare) {
+                        success();
+                    },
+                    fail);
+            },
+            fail);
+    }
+})
+EOF
+                  ])
+    (fprintf op template 
+             (get-empty-module-code)
+             (get-interaction-code program-stx))))
 
 
 
-(define (for-module)
+(define (get-empty-module-code)
   (let* ([lang-line (format "#lang s-exp (file ~s)\n" (path->string wescheme-language-module))]
          [bytecode-ip (get-module-bytecode/port
                        "empty-name"
@@ -106,6 +113,16 @@ EOF
          [code (encode-module-record module-record)])
     code))
 
+
+
+(define (get-interaction-code program-stx)
+  (let* ([interaction-record 
+          (compile-interaction `(file ,(path->string wescheme-interaction-language-module))
+                               program-stx)])
+    (encode-interaction-record interaction-record)))
+
+  
+ 
 
 
 (define (make-module-input-port lang-line text)
@@ -131,16 +148,14 @@ EOF
 
   
  
-#;(define evaluate (make-evaluator generate-javascript-and-run
-                                  #:extra-head-code extra-head-code
-                                  #:extra-files-path (list tmp-htdocs)))
-
-
+(define evaluate (make-evaluate generate-javascript-and-run
+                                #:extra-head-code extra-head-code
+                                #:extra-files-paths (list tmp-htdocs)))
 
 
 (define (read* inp)
   (parameterize ([read-accept-reader #t])
-    (datum->syntax `(begin ,@
+    (datum->syntax #f `(begin ,@
                            (let loop ()
                              (let ([next (read-syntax #f inp)])
                                (cond
@@ -159,11 +174,16 @@ EOF
                             (build-path suite-directory (format "~a.sch" module-name))
                           read*))])))
 
+
 (define (run suite-directory module-name)
-  (void)
-  #;(let ([result (evaluate (read-program suite-directory module-name))])
+  (let ([result (evaluate (read-program suite-directory module-name))])
     (make-measurement "current-seconds"
                       "js-vm" 
                       module-name
                       (evaluated-t result)
                       (evaluated-stdout result))))
+
+
+
+
+#;(define EMPTY-MODULE-CODE (get-empty-module-code))
