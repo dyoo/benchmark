@@ -191,7 +191,7 @@ EOF
 (define (run suite-directory module-name)
   (let ([result (evaluate (read-program suite-directory module-name))])
     (make-measurement (current-seconds)
-                      "js-vm" 
+		      (format "js-vm:~a" (evaluated-browser result))
                       module-name
                       (evaluated-t result)
                       (evaluated-stdout result))))
