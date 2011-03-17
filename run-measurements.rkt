@@ -8,11 +8,13 @@
 (require (prefix-in racket: "platforms/racket/runner.rkt"))
 (require (prefix-in browser: "platforms/js-sicp-5-5-browser/runner.rkt"))
 (require (prefix-in simulator: "platforms/js-sicp-5-5-simulator/runner.rkt"))
+(require (prefix-in js-vm: "platforms/js-vm/runner.rkt"))
 
 
 (define-runtime-path this-path ".")
 
-(define programs '(("programs/gauss" gauss)
+(define programs '(("programs/test" test)
+                   ("programs/gauss" gauss)
 		   ("programs/gauss-iter" gauss-iter)
 		   ("programs/cpstack" cpstack)
 		   ("programs/tak" tak)
@@ -29,5 +31,7 @@
       (save-measurement! (racket:run dir module-name))
       #;(printf "    simulator...\n")
       #;(save-measurement! (simulator:run dir module-name))
+      (printf "    js-vm...\n")
+      (save-measurement! (js-vm:run dir module-name))
       (printf "    browser...\n")
       (save-measurement! (browser:run dir module-name)))))

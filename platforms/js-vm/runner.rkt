@@ -2,10 +2,10 @@
 (require "private/private/write-runtime.rkt"
          "private/private/write-module-records.rkt"
          "private/private/compile-moby-module.rkt"
+         "private/private/module-record.rkt"
          "../../browser-evaluate.rkt"
          "../../measurement-struct.rkt"
          racket/port
-         racket/path
          racket/runtime-path)
 
 (provide run)
@@ -45,8 +45,18 @@
   
     <script src="runtime.js"></script>
     <script src="evaluator.js"></script>
+    <script src="modules.js"></script>
 EOF
   )
+
+
+(define (for-each/lazy f l)
+  (cond
+    [(null? l)
+     (void)]
+    [else
+     (f (car l))
+     (for-each/lazy f ((cdr l)))]))
 
 
 
@@ -58,7 +68,26 @@ EOF
         (write-runtime "browser" op))
       #:exists 'replace)
     (copy-support-files output-directory)
-    (copy-js-compatibility-libraries output-directory))
+    (copy-js-compatibility-libraries output-directory)
+  
+  
+  (let ([collection-roots
+       (list wescheme-language-module
+             wescheme-interaction-language-module)])
+  (call-with-output-file (build-path tmp-htdocs "modules.js")
+    (lambda (op)
+      (fprintf op "var MODULES = {};\n")
+      (let loop ([module-records/lazy
+                  (compile-moby-modules/lazy collection-roots self-path)])
+        (for-each/lazy (lambda (module-record)
+                         (let ([code (encode-module-record module-record)])
+                           (fprintf op
+                                    "MODULES[~s]=~a;\n"
+                                    (symbol->string (module-record-name 
+                                                     module-record))
+                                    code)))
+                       module-records/lazy)))
+    #:exists 'replace)))
 
 
 (define-runtime-path tmp-htdocs "tmp-htdocs")
@@ -69,43 +98,46 @@ EOF
 
 
 
-(define (generate-javascript-and-run program-stx op)
+
+
+
+
+(define (generate-javascript-and-run program-text op)
   (let ([template #<<EOF
 (function() {
-    var emptyModule = ~a;
-    var interaction = ~a;
-    var evaluator = new Evaluator();
+    var mainModule = ~a;
+    var evaluator = new Evaluator( {write: function(v) {} });
+    
     return function(success, fail, params) {
 
-        evaluator.write = function(v) { params.currentDisplayer(String(v)) };
-
-        evaluator.executeCompileProgram(
-            emptyModule.bytecode,
+        evaluator.write = function(v) {
+                              params.currentDisplayer(String(v.textContent)); 
+                          };
+        evaluator.executeCompiledProgram(
+            mainModule.bytecode,
             function(prefix) {
                 evaluator.absorbPrefixIntoNamespace(prefix);
-                evaluator.executeCompiledProgram(
-                    interaction.bytecode,
-                    function(dontCare) {
-                        success();
-                    },
-                    fail);
+                success();
             },
-            fail);
+            function(err) {
+                console.log(err);
+                fail(err.message);
+            });
     }
 })
 EOF
                   ])
     (fprintf op template 
-             (get-empty-module-code)
-             (get-interaction-code program-stx))))
+             (get-module-code program-text))))
 
 
 
-(define (get-empty-module-code)
+
+(define (get-module-code program-text)
   (let* ([lang-line (format "#lang s-exp (file ~s)\n" (path->string wescheme-language-module))]
          [bytecode-ip (get-module-bytecode/port
-                       "empty-name"
-                       (make-module-input-port lang-line ""))]
+                       program-text
+                       (make-module-input-port lang-line program-text))]
          [module-record 
           (compile-plain-racket-module self-path
                                        self-path
@@ -114,14 +146,6 @@ EOF
     code))
 
 
-
-(define (get-interaction-code program-stx)
-  (let* ([interaction-record 
-          (compile-interaction `(file ,(path->string wescheme-interaction-language-module))
-                               program-stx)])
-    (encode-interaction-record interaction-record)))
-
-  
  
 
 
@@ -153,26 +177,15 @@ EOF
                                 #:extra-files-paths (list tmp-htdocs)))
 
 
-(define (read* inp)
-  (parameterize ([read-accept-reader #t])
-    (datum->syntax #f `(begin ,@
-                           (let loop ()
-                             (let ([next (read-syntax #f inp)])
-                               (cond
-                                 [(eof-object? next)
-                                  '()]
-                                 [else
-                                  (cons next (loop))])))))))
-
 (define (read-program suite-directory module-name)
   (let ([desugared-path 
          (build-path suite-directory (format "~a-desugared.sch" module-name))])
     (cond [(file-exists? desugared-path)
-           (cons 'begin (call-with-input-file* desugared-path read*))]
+           (call-with-input-file* desugared-path port->string)]
           [else
-           (cons 'begin (call-with-input-file* 
-                            (build-path suite-directory (format "~a.sch" module-name))
-                          read*))])))
+           (call-with-input-file* 
+               (build-path suite-directory (format "~a.sch" module-name))
+             port->string)])))
 
 
 (define (run suite-directory module-name)
@@ -182,8 +195,3 @@ EOF
                       module-name
                       (evaluated-t result)
                       (evaluated-stdout result))))
-
-
-
-
-#;(define EMPTY-MODULE-CODE (get-empty-module-code))
