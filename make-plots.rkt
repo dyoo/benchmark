@@ -3,6 +3,7 @@
 (require racket/runtime-path
          racket/match
          racket/date
+         racket/list
          "measurement-struct.rkt")
 
 (define plots-path "data/plots")
@@ -70,22 +71,38 @@ EOF
 
 (define-runtime-path measurements "data/measurements")
 
-(define-struct data-point (current-seconds hostname program platform time)
+(define-struct data-point (yearmonthday hostname program platform time)
+  #:transparent)
+
+(define-struct yearmonthday (year month day)
   #:transparent)
 
 (define data-points 
   (let ()
+    (define (date->yearmonthday date)
+      (make-yearmonthday (date-year date)
+                         (date-month date)
+                         (date-day date)))
+    
     (define (sexp->data-point sexp)
       (match sexp
-        [(list (list 'current-date seconds readable-date)
+        [(list (list 'current-date seconds readable-date yearmonthday ...)
                (list 'host-name host-name)
                (list 'program program)
                (list 'platform platform)
                (list 'time time)
                (list 'output output))
-         ;; omit output
-         (make-data-point (seconds->date seconds) host-name (format "~a" program) platform time)]))
-    
+         (cond [(empty? yearmonthday)
+                (make-data-point (date->yearmonthday (seconds->date seconds))
+                                 host-name 
+                                 (format "~a" program)
+                                 platform 
+                                 time)]
+               [else
+                (make-data-point (make-yearmonthday (second 'year (assoc yearmonthday))
+                                                    (second 'month (assoc yearmonthday))
+                                                    (second 'day (assoc yearmonthday)))
+                                 host-name (format "~a" program) platform time)])]))    
     (define (read* ip)
       (let ([next (read ip)])
         (cond
@@ -107,10 +124,23 @@ EOF
 
 
 
+
 (define all-program-names (unique (map data-point-program data-points)))
 (define all-platform-names (unique (map data-point-platform data-points)))
 
+(define (cluster lst f)
+  (define ht (make-hash))
+  (for ([x lst])
+    (hash-set! ht (f x) (cons x (hash-ref ht (f x) '()))))
+  ht)
 
+
+(define (filter-points-by-program pts program-name)
+  (filter (lambda (p) (string=? (data-point-program p)
+                                program-name))
+          pts))
+
+(define cluster-datapoints-by-yearmonthday (cluster data-points data-point-yearmonthday))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 

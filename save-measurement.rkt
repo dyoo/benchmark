@@ -19,14 +19,18 @@
 			  platform
 			  program
 			  time
-			  output))
-     `((current-date ,current-seconds 
-                     ,(date->string (seconds->date current-seconds)))
-       (host-name ,(second (lookup-host-name)))
-       (program ,program)
-       (platform ,platform)
-       (time ,time)
-       (output , output))]))
+                          output))
+     (let ([date (seconds->date current-seconds)])
+       `((current-date ,current-seconds 
+                       ,(date->string (seconds->date current-seconds))
+                       (year ,(date-year date))
+                       (month ,(date-month date))
+                       (day ,(date-day date)))
+         (host-name ,(second (lookup-host-name)))
+         (program ,program)
+         (platform ,platform)
+         (time ,time)
+         (output , output)))]))
 
 
 
