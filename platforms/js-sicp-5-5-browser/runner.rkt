@@ -1,7 +1,6 @@
 #lang racket/base
 (require "../../measurement-struct.rkt"
-         "../../get-host-info.rkt"
-         "../../externals/js-sicp-5-5/browser-evaluate.rkt"
+         "../../browser-evaluate.rkt"
          "../../externals/js-sicp-5-5/package.rkt")
 
 (define evaluate (make-evaluate package-anonymous))
