@@ -21,7 +21,7 @@
 
 
 (define-runtime-path known-hosts "data/known-hosts")
-(define-runtime-path known-hosts "data/this-host")
+(define-runtime-path this-host "data/this-host")
 
 
 
