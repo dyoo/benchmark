@@ -1,5 +1,9 @@
 #lang racket/base
 
+
+;; http://code.google.com/apis/chart/docs/gallery/line_charts.html
+
+
 (require racket/runtime-path
          racket/match
          racket/date
@@ -31,6 +35,100 @@ EOF
 EOF
                     ])
     (format graph-text name name)))
+
+
+(define-runtime-path measurements "data/measurements")
+
+(define-struct data-point (date hostname program platform time)
+  #:transparent)
+
+(define data-points 
+  (let ()
+    
+    (define (sexp->data-point sexp)
+      (match sexp
+        [(list (list 'current-date seconds readable-date date-attrs ...)
+               (list 'host-name host-name)
+               (list 'program program)
+               (list 'platform platform)
+               (list 'time time)
+               (list 'output output))
+         (cond [(empty? date-attrs)
+                (make-data-point (seconds->date seconds)
+                                 host-name 
+                                 (format "~a" program)
+                                 platform 
+                                 time)]
+               [else
+                (make-data-point (apply make-date
+                                        (map (lambda (attr)
+                                               (second (assoc attr date-attrs)))
+                                             '(second 
+                                               minute hour 
+                                               day month year
+                                               week-day year-day 
+                                               dst? time-zone-offset)))
+                                 host-name
+                                 (format "~a" program) 
+                                 platform 
+                                 time)])]))    
+    (define (read* ip)
+      (let ([next (read ip)])
+        (cond
+          [(eof-object? next)
+           '()]
+          [else
+           (cons (sexp->data-point next) 
+                 (read* ip))])))
+    
+    (call-with-input-file measurements read*)))
+
+
+;; unique: (listof string) -> (listof string)
+(define (unique-strings strs)
+  (define ht (make-hash))
+  (for ([s strs]) (hash-set! ht s #t))
+  (sort (for/list ([k (in-hash-keys ht)]) k)
+        string<?))
+
+
+
+
+(define all-program-names (unique-strings (map data-point-program data-points)))
+(define all-platform-names (unique-strings (map data-point-platform data-points)))
+
+;; cluster: (listof X) (X -> Y) -> (hashof Y X)
+(define (cluster lst f)
+  (define ht (make-hash))
+  (for ([x lst])
+    (hash-set! ht (f x) (cons x (hash-ref ht (f x) '()))))
+  ht)
+
+;; filter-points-by-program: (listof data-point) string -> (listof points)
+(define (filter-points-by-program pts program-name)
+  (filter (lambda (p) (string=? (data-point-program p)
+                                program-name))
+          pts))
+
+;; date-point-year-month-day: data-point -> (list number number number)
+(define (data-point-year-month-day a-data-point)
+  (let ([date (data-point-date a-data-point)])
+    (list (date-year date)
+          (date-month date)
+          (date-day date))))
+         
+
+(define cluster-datapoints-by-day (cluster data-points data-point-year-month-day))
+
+
+
+
+
+
+
+
+
+
 
 
 (define (make-plot name)
@@ -69,78 +167,8 @@ EOF
 
 
 
-(define-runtime-path measurements "data/measurements")
-
-(define-struct data-point (yearmonthday hostname program platform time)
-  #:transparent)
-
-(define-struct yearmonthday (year month day)
-  #:transparent)
-
-(define data-points 
-  (let ()
-    (define (date->yearmonthday date)
-      (make-yearmonthday (date-year date)
-                         (date-month date)
-                         (date-day date)))
-    
-    (define (sexp->data-point sexp)
-      (match sexp
-        [(list (list 'current-date seconds readable-date yearmonthday ...)
-               (list 'host-name host-name)
-               (list 'program program)
-               (list 'platform platform)
-               (list 'time time)
-               (list 'output output))
-         (cond [(empty? yearmonthday)
-                (make-data-point (date->yearmonthday (seconds->date seconds))
-                                 host-name 
-                                 (format "~a" program)
-                                 platform 
-                                 time)]
-               [else
-                (make-data-point (make-yearmonthday (second 'year (assoc yearmonthday))
-                                                    (second 'month (assoc yearmonthday))
-                                                    (second 'day (assoc yearmonthday)))
-                                 host-name (format "~a" program) platform time)])]))    
-    (define (read* ip)
-      (let ([next (read ip)])
-        (cond
-          [(eof-object? next)
-           '()]
-          [else
-           (cons (sexp->data-point next) 
-                 (read* ip))])))
-    
-    (call-with-input-file measurements read*)))
 
 
-
-(define (unique strs)
-  (define ht (make-hash))
-  (for ([s strs]) (hash-set! ht s #t))
-  (sort (for/list ([k (in-hash-keys ht)]) k)
-        string<?))
-
-
-
-
-(define all-program-names (unique (map data-point-program data-points)))
-(define all-platform-names (unique (map data-point-platform data-points)))
-
-(define (cluster lst f)
-  (define ht (make-hash))
-  (for ([x lst])
-    (hash-set! ht (f x) (cons x (hash-ref ht (f x) '()))))
-  ht)
-
-
-(define (filter-points-by-program pts program-name)
-  (filter (lambda (p) (string=? (data-point-program p)
-                                program-name))
-          pts))
-
-(define cluster-datapoints-by-yearmonthday (cluster data-points data-point-yearmonthday))
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
