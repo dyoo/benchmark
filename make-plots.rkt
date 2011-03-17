@@ -120,12 +120,14 @@ EOF
 (define all-program-names (unique-strings (map data-point-program data-points)))
 (define all-platform-names (unique-strings (map data-point-platform data-points)))
 
+
 ;; cluster: (listof X) (X -> Y) -> (hashof Y X)
 (define (cluster lst f)
   (define ht (make-hash))
   (for ([x lst])
     (hash-set! ht (f x) (cons x (hash-ref ht (f x) '()))))
   ht)
+
 
 ;; filter-points-by-program: (listof data-point) string -> (listof points)
 (define (filter-points-by-program pts program-name)
@@ -134,21 +136,14 @@ EOF
           pts))
 
 
-(define cluster-datapoints-by-day (cluster data-points data-point-date))
-
-
-
-
-
-
-
-
+;;(define cluster-datapoints-by-day (cluster data-points data-point-date))
 
 
 
 
 (define (make-plot name)
-  (let ([text #<<EOF
+  (let* ([points (filter-points-by-program data-points name)]
+         [text #<<EOF
 <html xmlns="http://www.w3.org/1999/xhtml">
   <head>
   <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
@@ -168,11 +163,14 @@ EOF
   <body onload="loadAllGraphs()">
     <form action='https://chart.googleapis.com/chart' method='POST' id='post_form'
           onsubmit="this.action = 'https://chart.googleapis.com/chart?chid=' + (new Date()).getMilliseconds(); return true;">
-      <input type='hidden' name='cht' value='lc'/>
+      <input type='hidden' name='cht' value='lxy'/>
       <input type='hidden' name='chtt' value=~s/>
       <input type='hidden' name='chs' value='300x200'/>
-      <input type='hidden' name='chxt' value='x'/>
-      <input type='hidden' name='chd' value='t:40,20,50,20,100'/>
+      <input type='hidden' name='chxt' value='x,y'/>
+      <input type='hidden' name='chxr' value='0,0,6|1,0,1000'>
+      <input type='hidden' name='chco' value="FF0000,00FF00,0000FF">
+      <input type='hidden' name='chdl' value="racket|browser|js-vm">
+      <input type='hidden' name='chd' value='t:1,2,3,4,5,6|40,20,50,20,3,17|1,2,3,4,5,6|50,100,50,20,10|1,2,3,4,5,6|1,2,3,4,5,6'/>
       <input type='submit'/>
     </form>
   </body>
@@ -181,6 +179,16 @@ EOF
               ])
     (format text name)))
 
+
+
+
+(define (normalize numbers)
+  (let* ([min-val (apply min numbers)]
+         [max-val (apply max numbers)]
+         [width (- max-val min-val)])
+    (map (lambda (n)
+           (exact->inexact (* (/ (- n min-val) width) 100)))
+         numbers)))
 
 
 
@@ -193,7 +201,7 @@ EOF
     (display (format template 
                      (apply string-append
                             (map make-graph-link
-                                 all-program-names)))
+                                 (take all-program-names 1))))
              op))
   #:exists 'replace)
 
