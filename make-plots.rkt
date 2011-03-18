@@ -2,12 +2,17 @@
 
 
 ;; http://code.google.com/apis/chart/docs/gallery/line_charts.html
-
+;;
+;; This program takes the data/measurements and plots the performance of js-sicp and browser
+;; with regards to raw Racket.
+;;
 
 (require racket/runtime-path
          racket/match
          racket/date
          racket/list
+         racket/string
+         racket/pretty
          "measurement-struct.rkt")
 
 (define plots-path "data/plots")
@@ -131,18 +136,96 @@ EOF
 
 ;; filter-points-by-program: (listof data-point) string -> (listof points)
 (define (filter-points-by-program pts program-name)
-  (filter (lambda (p) (string=? (data-point-program p)
-                                program-name))
-          pts))
+  (filter-points-by-key pts data-point-program program-name))
 
+
+(define (filter-points-by-key pts key-f name)
+  (filter (lambda (p) (string=? (key-f p)
+                                name))
+          pts))
+  
 
 ;;(define cluster-datapoints-by-day (cluster data-points data-point-date))
 
 
 
 
+(define (average nums)
+  (/ (apply + nums)
+     (length nums)))
+
+
+;; (listof data-point) -> (listof (list [test-name string] (listof analyzed-point)))
+(define (analyze)
+  (for/list ([test (unique-strings (map data-point-program data-points))])
+    (list test (analyze-by-test (filter-points-by-program data-points test)))))
+
+
+;; (listof data-point) -> (listof ...)
+(define (analyze-by-test points)
+  (let ([clustered-by-day (cluster points data-point-date)])
+    (apply append
+           (for/list ([day (in-hash-keys clustered-by-day)])
+             (analyze-single-day day (hash-ref clustered-by-day day))))))
+
+
+;; number points -> (listof analyzed-point)
+(define (analyze-single-day day points)
+  (let* ([ht (make-hash)]
+         [hosts (unique-strings (map data-point-hostname points))]
+         [data-per-host
+          (for/list ([host hosts])
+            (analyze-single-day-and-host day (filter-points-by-key points data-point-hostname host)))])
+    ;; we need to normalize the data per host.
+    (define (normalize pts)
+      (let ([ht (make-hash)])
+        (for ([p pts])
+          (hash-set! ht (analyzed-point-platform p) 
+                     (cons (analyzed-point-times-slower p)
+                           (hash-ref ht (analyzed-point-platform p) '()))))
+        (for/list ([key (in-hash-keys ht)])
+          (make-analyzed-point day key (average (hash-ref ht key))))))
+    (normalize (apply append data-per-host))))
+
+;; number points -> (listof analyzed-point)
+(define (analyze-single-day-and-host day points)
+  (pretty-print points)
+  ;; First, find how long it took for racket.
+  (let ([time-for-racket
+         (average (map data-point-time 
+                       (filter-points-by-key points data-point-platform "racket")))])
+    (printf "Time for racket: ~s\n" time-for-racket)
+    ;; Then, for every other platform, restate the data in terms of times slower than racket. 
+    (for/list ([platform (remove "racket" (unique-strings (map data-point-platform points)))])
+      (let ([platform-points (filter-points-by-key points data-point-platform platform)])
+        (let ([times-slower
+               (/ (average (map data-point-time platform-points))
+                  time-for-racket)])
+          (printf "~s: ~s times slower than racket\n" 
+                  platform
+                  times-slower)
+          (make-analyzed-point day platform #;time-for-racket times-slower))))))
+
+(define-struct analyzed-point (day platform #;time-for-racket times-slower)
+  #:transparent)
+
+
+
+
+
+                                                     
+
+
+
+
+
 (define (make-plot name)
   (let* ([points (filter-points-by-program data-points name)]
+         [clustered-by-day (cluster points data-point-date)]
+         [platform-names (remove "racket" (unique-strings (map data-point-platform points)))]
+         [colors (take ALL-COLORS (length platform-names))]
+         [max-days (apply max (map data-point-date points))]
+         [max-times (apply max (map data-point-time points))]
          [text #<<EOF
 <html xmlns="http://www.w3.org/1999/xhtml">
   <head>
@@ -167,18 +250,26 @@ EOF
       <input type='hidden' name='chtt' value=~s/>
       <input type='hidden' name='chs' value='300x200'/>
       <input type='hidden' name='chxt' value='x,y'/>
-      <input type='hidden' name='chxr' value='0,0,6|1,0,1000'>
-      <input type='hidden' name='chco' value="FF0000,00FF00,0000FF">
-      <input type='hidden' name='chdl' value="racket|browser|js-vm">
-      <input type='hidden' name='chd' value='t:1,2,3,4,5,6|40,20,50,20,3,17|1,2,3,4,5,6|50,100,50,20,10|1,2,3,4,5,6|1,2,3,4,5,6'/>
+      <input type='hidden' name='chxr' value='0,0,~a|1,0,~a'>
+      <input type='hidden' name='chco' value="~a">
+      <input type='hidden' name='chdl' value="~a">
+      <input type='hidden' name='chd' value='t:~a'/>
       <input type='submit'/>
     </form>
   </body>
 </html>
 EOF
               ])
-    (format text name)))
+    (format text name
+            max-days
+            max-times
+            (string-join colors ",")
+            (string-join platform-names "|")
+            '() ;; points
+            )))
 
+
+(define ALL-COLORS '("FF0000" "00FF00" "0000FF" "0FF0000" "000FF0" "F0F000" "F00F00"))
 
 
 
