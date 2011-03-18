@@ -260,8 +260,8 @@ EOF
 (define (make-plot name)
   (let* ([points (second (assoc name analyzed-points))]
          [platform-names (remove "racket" (unique-strings (map analyzed-point-platform points)))]
-         [colors (take ALL-COLORS (length platform-names))]
-         [min-days (apply min (map analyzed-point-day points))]
+         [colors (map platform-name->color platform-names)]
+         [min-days 0 #;(apply min (map analyzed-point-day points))]
          [max-days (apply max (map analyzed-point-day points))]
          [min-times-slower (apply min (map analyzed-point-times-slower points))]
          [max-times-slower (apply max (map analyzed-point-times-slower points))]
@@ -340,7 +340,36 @@ EOF
             )))
 
 
-(define ALL-COLORS '("FF0000" "00FF00" "0000FF" "0FF0FF"))
+(define WEB-COLORS '(;"FFFFFF" ;; white
+                     ;"C0C0C0" ;; silver
+                     ;"808080" ;; gray
+                     "FF0000" ;; red
+                     ;"FFFF00" ;; yellow
+                     "808000" ;; olive
+                     ;"008000" ;; green
+                     "000000" ;; black
+                     "0000FF" ;; blue
+                     "800000" ;; maroon
+                     ;"00FF00" ;; lime
+                     ;"00FFFF" ;; aqua
+                     "008080" ;; teal
+
+                     ;"000080" ;; navy
+                     ;"FF00FF" ;; fushia
+                     "800080" ;; purple
+                     ))
+
+(define platform-name->color 
+  (let ([counter 0]
+        [ht (make-hash)])
+  (lambda (name)
+    (cond
+      [(hash-has-key? ht name)
+       (hash-ref ht name)]
+      [else
+       (hash-set! ht name (list-ref WEB-COLORS counter))
+       (set! counter (add1 counter))
+       (hash-ref ht name)]))))
 
 
 
