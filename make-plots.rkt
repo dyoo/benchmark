@@ -217,20 +217,26 @@ EOF
 ;; number points -> (listof analyzed-point)
 (define (analyze-single-day-and-host day points)
   ;; First, find how long it took for racket.
-  (let ([time-for-racket
-         (average (map data-point-time 
-                       (filter-points-by-key points data-point-platform "racket")))])
-    #;(printf "Time for racket: ~s\n" time-for-racket)
-    ;; Then, for every other platform, restate the data in terms of times slower than racket. 
-    (for/list ([platform (remove "racket" (unique-strings (map data-point-platform points)))])
-      (let ([platform-points (filter-points-by-key points data-point-platform platform)])
-        (let ([times-slower
-               (/ (average (map data-point-time platform-points))
-                  time-for-racket)])
-          #;(printf "~s: ~s times slower than racket\n" 
-                  platform
-                  times-slower)
-          (make-analyzed-point (add1 day) platform times-slower))))))
+  (let* ([racket-times
+          (map data-point-time 
+               (filter-points-by-key points data-point-platform "racket"))])
+    (cond
+      [(empty? racket-times)
+       '()]
+      [else
+       (let ([average-racket-time
+              (average racket-times)])
+         #;(printf "Time for racket: ~s\n" time-for-racket)
+         ;; Then, for every other platform, restate the data in terms of times slower than racket. 
+         (for/list ([platform (remove "racket" (unique-strings (map data-point-platform points)))])
+           (let ([platform-points (filter-points-by-key points data-point-platform platform)])
+             (let ([times-slower
+                    (/ (average (map data-point-time platform-points))
+                       average-racket-time)])
+               #;(printf "~s: ~s times slower than racket\n" 
+                         platform
+                         times-slower)
+               (make-analyzed-point (add1 day) platform times-slower)))))])))
 
 (define-struct analyzed-point (day platform times-slower)
   #:transparent)
@@ -387,6 +393,9 @@ EOF
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
+
+(unless (directory-exists? plots-path)
+  (make-directory plots-path))
 
 (call-with-output-file (build-path plots-path "index.html")
   (lambda (op)

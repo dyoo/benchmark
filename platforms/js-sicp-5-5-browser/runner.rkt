@@ -1,9 +1,38 @@
 #lang racket/base
 (require "../../measurement-struct.rkt"
-         "../../browser-evaluate.rkt"
-         "../../externals/js-sicp-5-5/package.rkt")
+         "../../get-host-info.rkt"
+         "../../externals/js-sicp-5-5/browser-evaluate.rkt"
+         "../../externals/js-sicp-5-5/package.rkt"
+	 racket/runtime-path
+	 racket/port)
 
-(define evaluate (make-evaluate package-anonymous))
+(define-runtime-path runtime.js "../../externals/js-sicp-5-5/runtime.js")
+
+(define evaluate (make-evaluate 
+                  (lambda (program op)
+
+                    (fprintf op "(function () {")
+                    
+                    ;; The runtime code
+                    (call-with-input-file* runtime.js
+                      (lambda (ip)
+                        (copy-port ip op)))
+                    
+                    (newline op)
+                    
+                    (fprintf op "var innerInvoke = ")
+                    (package-anonymous program op)
+                    (fprintf op "();\n")
+                    
+                    (fprintf op #<<EOF
+return (function(succ, fail, params) {
+            return innerInvoke(MACHINE, succ, fail, params);
+        });
+});
+EOF
+                             ))))
+
+
 
 (provide run)
 

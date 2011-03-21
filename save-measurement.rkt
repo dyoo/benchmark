@@ -31,7 +31,7 @@
                        (hour ,(date-hour date))
                        (week-day ,(date-week-day date))
                        (year-day ,(date-year-day date))
-                       (dst? ,(day-dst date))
+                       (dst? ,(date-dst? date))
                        (time-zone-offset ,(date-time-zone-offset date)))
          (host-name ,(second (lookup-host-name)))
          (program ,program)
