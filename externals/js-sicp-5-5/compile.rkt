@@ -3,40 +3,26 @@
 (require "expression-structs.rkt"
          "lexical-structs.rkt"
          "il-structs.rkt"
-         "lexical-env.rkt"
-         "helpers.rkt"
-         "find-toplevel-variables.rkt"
-         "sets.rkt"
          racket/list)
 
 (provide (rename-out [-compile compile])
          compile-procedure-call
          append-instruction-sequences
-         current-defined-name
          adjust-target-depth)
 
 
-(: current-defined-name (Parameterof (U Symbol False)))
-(define current-defined-name (make-parameter #f))
-
-
-;(provide compile-top)
 
 (: -compile (ExpressionCore Target Linkage -> (Listof Statement)))
 (define (-compile exp target linkage)
   (statements
-   (let ([end (make-label 'end)])
-     (append-instruction-sequences
-      (compile (make-Top (make-Prefix (find-toplevel-variables exp))
-                         exp)
-               (list)
-               target 
-               linkage)))))
+   (compile exp
+            0
+            target 
+            linkage)))
 
 
 
-
-(: compile (ExpressionCore CompileTimeEnvironment Target Linkage -> InstructionSequence))
+(: compile (ExpressionCore Natural Target Linkage -> InstructionSequence))
 ;; Compiles an expression into an instruction sequence.
 (define (compile exp cenv target linkage)
   (cond
@@ -44,10 +30,12 @@
      (compile-top exp cenv target linkage)]
     [(Constant? exp)
      (compile-constant exp cenv target linkage)]
-    [(Var? exp)
-     (compile-variable exp cenv target linkage)]
-    [(Def? exp)
-     (compile-definition exp cenv target linkage)]
+    [(LocalRef? exp)
+     (compile-local-reference exp cenv target linkage)]
+    [(ToplevelRef? exp)
+     (compile-toplevel-reference exp cenv target linkage)]
+    [(ToplevelSet? exp)
+     (compile-toplevel-set exp cenv target linkage)]
     [(Branch? exp)
      (compile-branch exp cenv target linkage)]
     [(Lam? exp)
@@ -61,33 +49,34 @@
      (compile-application exp cenv target linkage)]
     [(Let1? exp)
      (compile-let1 exp cenv target linkage)]
-    [(Let? exp)
-     (compile-let exp cenv target linkage)]
-    [(LetRec? exp)
-     (compile-letrec exp cenv target linkage)]))
+    [(LetVoid? exp)
+     (compile-let-void exp cenv target linkage)]
+    [(InstallValue? exp)
+     (compile-install-value exp cenv target linkage)]
+    [(BoxEnv? exp)
+     (compile-box-environment-value exp cenv target linkage)]))
 
 
 
-(: compile-top (Top CompileTimeEnvironment Target Linkage -> InstructionSequence))
+
+(: compile-top (Top Natural Target Linkage -> InstructionSequence))
 (define (compile-top top cenv target linkage)
-  (let*: ([cenv : CompileTimeEnvironment (extend-lexical-environment cenv (Top-prefix top))]
-          [names : (Listof (U Symbol False)) (Prefix-names (Top-prefix top))])
+  (let*: ([names : (Listof (U Symbol False)) (Prefix-names (Top-prefix top))])
          (append-instruction-sequences
           (make-instruction-sequence 
            `(,(make-PerformStatement (make-ExtendEnvironment/Prefix! names))))
-          (compile (Top-code top) cenv target linkage))))
+          (compile (Top-code top) (add1 cenv) target linkage))))
 
 
 
 ;; Add linkage for expressions.
-(: end-with-linkage (Linkage CompileTimeEnvironment InstructionSequence ->
-                             InstructionSequence))
+(: end-with-linkage (Linkage Natural InstructionSequence -> InstructionSequence))
 (define (end-with-linkage linkage cenv instruction-sequence)
   (append-instruction-sequences instruction-sequence
                                 (compile-linkage cenv linkage)))
 
 
-(: end-with-compiled-application-linkage (Linkage CompileTimeEnvironment InstructionSequence ->
+(: end-with-compiled-application-linkage (Linkage Natural InstructionSequence ->
                                                   InstructionSequence))
 ;; Add linkage for applications; we need to specialize this to preserve tail calls.
 (define (end-with-compiled-application-linkage linkage cenv instruction-sequence)
@@ -96,15 +85,13 @@
 
 
 
-(: compile-linkage (CompileTimeEnvironment Linkage -> InstructionSequence))
+(: compile-linkage (Natural Linkage -> InstructionSequence))
 (define (compile-linkage cenv linkage)
   (cond
     [(eq? linkage 'return)
      (make-instruction-sequence `(,(make-AssignPrimOpStatement 'proc
                                                                (make-GetControlStackLabel))
-                                  ,(make-PopEnvironment 
-                                    (lexical-environment-pop-depth cenv linkage)
-                                    0)
+                                  ,(make-PopEnvironment cenv 0)
                                   ,(make-PopControlFrame)
                                   ,(make-GotoStatement (make-Reg 'proc))))]
     [(eq? linkage 'next)
@@ -113,92 +100,74 @@
      (make-instruction-sequence `(,(make-GotoStatement (make-Label linkage))))]))
 
 
-(: compile-application-linkage (CompileTimeEnvironment Linkage -> InstructionSequence))
+(: compile-application-linkage (Natural Linkage -> InstructionSequence))
 ;; Like compile-linkage, but the special case for 'return linkage already assumes
 ;; the stack has been appropriately popped.
 (define (compile-application-linkage cenv linkage)
   (cond
     [(eq? linkage 'return)
-     (make-instruction-sequence `(,(make-AssignPrimOpStatement 'proc
-                                                               (make-GetControlStackLabel))
+     (make-instruction-sequence `(,(make-AssignPrimOpStatement 'proc (make-GetControlStackLabel))
                                   ,(make-PopControlFrame)
                                   ,(make-GotoStatement (make-Reg 'proc))))]
     [(eq? linkage 'next)
-     (make-instruction-sequence `(,(make-PopEnvironment (lexical-environment-pop-depth cenv linkage)
-                                                        0)))]
+     (make-instruction-sequence `(,(make-PopEnvironment cenv 0)))]
     [(symbol? linkage)
-     (make-instruction-sequence `(,(make-PopEnvironment (lexical-environment-pop-depth cenv linkage)
-                                                        0)
+     (make-instruction-sequence `(,(make-PopEnvironment cenv 0)
                                   ,(make-GotoStatement (make-Label linkage))))]))
 
 
 
-
-(: lexical-environment-pop-depth (CompileTimeEnvironment Linkage -> Natural))
-;; Computes how much of the environment we need to pop.
-(define (lexical-environment-pop-depth cenv linkage)
-  (length cenv))
-
-
-
-
-(: compile-constant (Constant CompileTimeEnvironment Target Linkage -> InstructionSequence))
+(: compile-constant (Constant Natural Target Linkage -> InstructionSequence))
 (define (compile-constant exp cenv target linkage)
   (end-with-linkage linkage
                     cenv
                     (make-instruction-sequence
                      `(,(make-AssignImmediateStatement target (make-Const (Constant-v exp)))))))
 
-(: compile-variable (Var CompileTimeEnvironment Target Linkage -> InstructionSequence))
-(define (compile-variable exp cenv target linkage)
-  (let ([lexical-pos (find-variable (Var-id exp) cenv)])
-    (cond
-      [(LocalAddress? lexical-pos)
-       (end-with-linkage linkage
-                         cenv
-                         (make-instruction-sequence
-                          `(,(make-AssignImmediateStatement 
-                              target
-                              (make-EnvLexicalReference (LocalAddress-depth lexical-pos)
-                                                        (LocalAddress-unbox? lexical-pos))))))]
-      [(PrefixAddress? lexical-pos)
-       (end-with-linkage linkage
-                         cenv
-                         (make-instruction-sequence
-                          `(,(make-PerformStatement (make-CheckToplevelBound!
-                                                     (PrefixAddress-depth lexical-pos)
-                                                     (PrefixAddress-pos lexical-pos)
-                                                     (PrefixAddress-name lexical-pos)))
-                            ,(make-AssignImmediateStatement 
-                              target
-                              (make-EnvPrefixReference
-                               (PrefixAddress-depth lexical-pos)
-                               (PrefixAddress-pos lexical-pos))))))])))
 
 
-(: compile-definition (Def CompileTimeEnvironment Target Linkage -> InstructionSequence))
-(define (compile-definition exp cenv target linkage)
-  (let* ([var (Def-variable exp)]
-         [lexical-pos (find-variable var cenv)])
-    (cond
-      [(LocalAddress? lexical-pos)
-       (error 'compile-definition "Defintion not at toplevel")]
-      [(PrefixAddress? lexical-pos)
-       (let ([get-value-code
-              (parameterize ([current-defined-name var])
-                (compile (Def-value exp) cenv (make-EnvPrefixReference 
-                                               (PrefixAddress-depth lexical-pos)
-                                               (PrefixAddress-pos lexical-pos))
-                         'next))])
-         (end-with-linkage
-          linkage
-          cenv
-          (append-instruction-sequences
-           get-value-code
-           (make-instruction-sequence `(,(make-AssignImmediateStatement target (make-Const 'ok)))))))])))
+(: compile-local-reference (LocalRef Natural Target Linkage -> InstructionSequence))
+(define (compile-local-reference exp cenv target linkage)
+  (end-with-linkage linkage
+                    cenv
+                    (make-instruction-sequence
+                     `(,(make-AssignImmediateStatement 
+                         target
+                         (make-EnvLexicalReference (LocalRef-depth exp)
+                                                   (LocalRef-unbox? exp)))))))
 
 
-(: compile-branch (Branch CompileTimeEnvironment Target Linkage -> InstructionSequence))
+(: compile-toplevel-reference (ToplevelRef Natural Target Linkage -> InstructionSequence))
+(define (compile-toplevel-reference exp cenv target linkage)
+  (end-with-linkage linkage
+                    cenv
+                    (make-instruction-sequence
+                     `(,(make-PerformStatement (make-CheckToplevelBound!
+                                                (ToplevelRef-depth exp)
+                                                (ToplevelRef-pos exp)))
+                       ,(make-AssignImmediateStatement 
+                         target
+                         (make-EnvPrefixReference (ToplevelRef-depth exp)
+                                                  (ToplevelRef-pos exp)))))))
+
+
+(: compile-toplevel-set (ToplevelSet Natural Target Linkage -> InstructionSequence))
+(define (compile-toplevel-set exp cenv target linkage)
+  (let* ([var (ToplevelSet-name exp)]
+         [lexical-pos (make-EnvPrefixReference (ToplevelSet-depth exp)
+                                               (ToplevelSet-pos exp))])
+    (let ([get-value-code
+           (compile (ToplevelSet-value exp) cenv lexical-pos
+                    'next)])
+      (end-with-linkage
+       linkage
+       cenv
+       (append-instruction-sequences
+        get-value-code
+        (make-instruction-sequence `(,(make-AssignImmediateStatement target (make-Const (void))))))))))
+
+
+(: compile-branch (Branch Natural Target Linkage -> InstructionSequence))
 (define (compile-branch exp cenv target linkage)  
   (let ([t-branch (make-label 'trueBranch)]
         [f-branch (make-label 'falseBranch)]
@@ -223,7 +192,7 @@
                                        after-if))))))
 
 
-(: compile-sequence ((Listof Expression) CompileTimeEnvironment Target Linkage -> InstructionSequence))
+(: compile-sequence ((Listof Expression) Natural Target Linkage -> InstructionSequence))
 (define (compile-sequence seq cenv target linkage) 
   ;; All but the last will use 'next linkage.
   (if (last-exp? seq)
@@ -232,7 +201,7 @@
                                     (compile-sequence (rest-exps seq) cenv target linkage))))
 
 
-(: compile-lambda (Lam CompileTimeEnvironment Target Linkage -> InstructionSequence))
+(: compile-lambda (Lam Natural Target Linkage -> InstructionSequence))
 ;; Write out code for lambda expressions.
 ;; The lambda will close over the free variables.
 (define (compile-lambda exp cenv target linkage) 
@@ -241,94 +210,34 @@
           [lambda-linkage : Linkage
                           (if (eq? linkage 'next)
                               after-lambda
-                              linkage)]
-          [free-vars : (Listof Symbol) (find-toplevel-variables exp)]
-          [lexical-addresses : (Listof LexicalAddress) 
-                             (map (lambda: ([var : Symbol])
-                                           (find-variable var cenv))
-                                  free-vars)]
-          [lexical-references : (Listof EnvReference)
-                              (collect-lexical-references lexical-addresses)])
+                              linkage)])
          (append-instruction-sequences
           (end-with-linkage 
            lambda-linkage
            cenv
            (make-instruction-sequence 
-            `(,(make-AssignPrimOpStatement target
-                                           (make-MakeCompiledProcedure proc-entry
-                                                                       (length (Lam-parameters exp))
-                                                                       lexical-references
-                                                                       (current-defined-name))))))
-          (compile-lambda-body exp cenv
-                               lexical-references
-                               free-vars
-                               proc-entry)
+            `(,(make-AssignPrimOpStatement 
+                target
+                (make-MakeCompiledProcedure proc-entry
+                                            (Lam-num-parameters exp)
+                                            (Lam-closure-map exp)
+                                            (Lam-name exp))))))
+          (compile-lambda-body exp proc-entry)
           after-lambda)))
 
 
-
-
-
-
-(: compile-lambda-body (Lam CompileTimeEnvironment 
-                            (Listof EnvReference)
-                            (Listof Symbol)
-                            Linkage 
-                            -> 
-                            InstructionSequence))
+(: compile-lambda-body (Lam Linkage -> InstructionSequence))
 ;; Compiles the body of the lambda in the appropriate environment.
-(define (compile-lambda-body exp cenv lexical-references free-variables proc-entry)
-  (let*: ([formals : (Listof Symbol) (Lam-parameters exp)]
-          [extended-cenv : CompileTimeEnvironment 
-                         (extend-lexical-environment/names
-                          '() 
-                          formals)]
-          [extended-cenv : CompileTimeEnvironment 
-                         (lexical-references->compile-time-environment 
-                          lexical-references cenv extended-cenv
-                          free-variables)])
-         (append-instruction-sequences
-          (make-instruction-sequence 
-           `(,proc-entry
-             ,(make-PerformStatement (make-InstallClosureValues!))))
-          (compile (Lam-body exp) extended-cenv 'val 'return))))
-
-
-
-#;(: compile-letrec (Letrec CompileTimeEnvironment Target Linkage -> InstructionSequence))
-#;(define (compile-letrec exp cenv target linkage)
-  (let* ([after-let (make-label 'afterLet)]
-         [let-linkage (if (eq? linkage 'next)
-                          after-let
-                          linkage)]
-         [extended-cenv : CompileTimeEnvironment
-                        (extend-lexical-environment/names
-                         '()
-                         (reverse (Letrec-names exp)))]
-         [lam-codes : (Listof InstructionSequence)
-                    (let: ([n : Natural (length (Letrec-procs exp))])
-                    (map (lambda: ([lam : Lam]
-                                   [target : Target])
-                                  (compile-lambda lam extended-cenv target 'next))
-                         (Letrec-procs exp)
-                         (build-list (length (Letrec-procs exp))
-                                     (lambda: ([i : Natural])
-                                              (make-EnvLexicalReference (- n 1 i))))))]
-         [body-code : InstructionSequence 
-                    (compile (Letrec-body exp) extended-cenv target let-linkage)]
-   (append-instruction-sequences
-    (end-with-linkage let-linkage cenv
-     (make-instruction-sequence `(;; create space for the lambdas
-                                  ,(make-PushEnvironment n)  
-                                  ;; install each one of them in place
-                                  (apply append-instruction-sequences lam-codes)
-                                  ;; mutate each of the lambda's shells so they're correct
-                                  
-                                  ;; evaluate the body
-                                  body-code
-                                  ;; pop the temporary space
-                                  )))
-    after-let))))
+(define (compile-lambda-body exp proc-entry)
+  (append-instruction-sequences
+   (make-instruction-sequence 
+    `(,proc-entry
+      ,(make-PerformStatement (make-InstallClosureValues!))))
+   (compile (Lam-body exp)
+            (+ (Lam-num-parameters exp)
+               (length (Lam-closure-map exp)))
+            'val
+            'return)))
 
          
 
@@ -336,9 +245,9 @@
 ;; FIXME: I need to implement important special cases.
 ;; 1. We may be able to open-code if the operator is primitive
 ;; 2. We may have a static location to jump to if the operator is lexically scoped.
-(: compile-application (App CompileTimeEnvironment Target Linkage -> InstructionSequence))
+(: compile-application (App Natural Target Linkage -> InstructionSequence))
 (define (compile-application exp cenv target linkage) 
-  (let* ([extended-cenv (extend-lexical-environment/placeholders cenv (length (App-operands exp)))]
+  (let* ([extended-cenv (+ cenv (length (App-operands exp)))]
          [proc-code (compile (App-operator exp)
                              extended-cenv 
                              (if (empty? (App-operands exp))
@@ -361,7 +270,8 @@
      (make-instruction-sequence `(,(make-PushEnvironment (length (App-operands exp)) #f)))
      proc-code
      (juggle-operands operand-codes)
-     (compile-procedure-call cenv extended-cenv 
+     (compile-procedure-call cenv 
+                             extended-cenv 
                              (length (App-operands exp)) 
                              target linkage))))
 
@@ -395,10 +305,10 @@
 
 
 
-(: compile-procedure-call (CompileTimeEnvironment CompileTimeEnvironment 
-                                                  Natural Target Linkage 
-                                                  ->
-                                                  InstructionSequence))
+(: compile-procedure-call (Natural Natural
+                                   Natural Target Linkage 
+                                   ->
+                                   InstructionSequence))
 ;; Assumes the procedure value has been loaded into the proc register.
 ;; n is the number of arguments passed in.
 ;; cenv is the compile-time enviroment before arguments have been shifted in.
@@ -420,7 +330,7 @@
        (end-with-compiled-application-linkage 
         compiled-linkage
         extended-cenv
-        (compile-proc-appl extended-cenv n target compiled-linkage))
+        (compile-proc-appl cenv extended-cenv n target compiled-linkage))
        
        primitive-branch
        (end-with-linkage
@@ -439,13 +349,13 @@
 
 
 
-(: compile-proc-appl (CompileTimeEnvironment Natural Target Linkage -> InstructionSequence))
+(: compile-proc-appl (Natural Natural Natural Target Linkage -> InstructionSequence))
 ;; Three fundamental cases for general compiled-procedure application.
 ;;    1.  Non-tail calls that write to val
 ;;    2.  Calls in argument position that write to the environment
 ;;    3.  Tail calls.
 ;; The Other cases should be excluded.
-(define (compile-proc-appl cenv n target linkage)
+(define (compile-proc-appl cenv-without-args cenv-with-args n target linkage)
   (cond [(and (eq? target 'val)
               (not (eq? linkage 'return)))
          ;; This case happens for a function call that isn't in
@@ -476,8 +386,7 @@
          (make-instruction-sequence
           `(,(make-AssignPrimOpStatement 'val 
                                          (make-GetCompiledProcedureEntry))
-            ,(make-PopEnvironment (ensure-natural (- (lexical-environment-pop-depth cenv linkage)
-                                                     n))
+            ,(make-PopEnvironment (ensure-natural (- cenv-with-args n))
                                   n)
             ,(make-GotoStatement (make-Reg 'val))))]
         
@@ -487,20 +396,18 @@
          ;; occur when we're in tail position, and we're in tail position
          ;; only when the target is the val register.
          (error 'compile "return linkage, target not val: ~s" target)]))
+         
 
-
-(: compile-let1 (Let1 CompileTimeEnvironment Target Linkage -> InstructionSequence))
+(: compile-let1 (Let1 Natural Target Linkage -> InstructionSequence))
 (define (compile-let1 exp cenv target linkage)
   (let*: ([rhs-code : InstructionSequence 
-                    (parameterize ([current-defined-name (Let1-name exp)])
-                      (compile (Let1-rhs exp)
-                               (extend-lexical-environment/placeholders cenv 1)
+                    (compile (Let1-rhs exp)
+                               (add1 cenv)
                                (make-EnvLexicalReference 0 #f)
-                               'next))]
+                               'next)]
           [after-let1 : Symbol (make-label 'afterLetOne)]
           [after-body-code : Symbol (make-label 'afterLetBody)]
-          [extended-cenv : CompileTimeEnvironment
-                         (extend-lexical-environment/names cenv (list (Let1-name exp)))]
+          [extended-cenv : Natural (add1 cenv)]
           [let-linkage : Linkage
                        (cond
                          [(eq? linkage 'next)
@@ -525,25 +432,12 @@
 
 
 
-(: compile-let (Let CompileTimeEnvironment Target Linkage -> InstructionSequence))
-(define (compile-let exp cenv target linkage)
-  (let*: ([n : Natural (length (Let-rhss exp))]
-          [rhs-codes : (Listof InstructionSequence)
-                     (map (lambda: ([rhs : ExpressionCore]
-                                    [i : Natural]
-                                    [name : Symbol])
-                                   (parameterize ([current-defined-name name])
-                                     (compile rhs
-                                              (extend-lexical-environment/placeholders cenv n)
-                                              (make-EnvLexicalReference i #f)
-                                              'next)))
-                          (Let-rhss exp)
-                          (build-list n (lambda: ([i : Natural]) i))
-                          (Let-names exp))]
+(: compile-let-void (LetVoid Natural Target Linkage -> InstructionSequence))
+(define (compile-let-void exp cenv target linkage)
+  (let*: ([n : Natural (LetVoid-count exp)]
           [after-let : Symbol (make-label 'afterLet)]
           [after-body-code : Symbol (make-label 'afterLetBody)]
-          [extended-cenv : CompileTimeEnvironment
-                         (extend-lexical-environment/names cenv (Let-names exp))]
+          [extended-cenv : Natural (+ cenv (LetVoid-count exp))]
           [let-linkage : Linkage
                        (cond
                          [(eq? linkage 'next)
@@ -554,77 +448,34 @@
                           after-body-code])]
           [body-target : Target (adjust-target-depth target n)]
           [body-code : InstructionSequence
-                     (compile (Let-body exp) extended-cenv body-target let-linkage)])
+                     (compile (LetVoid-body exp) extended-cenv body-target let-linkage)])
          (end-with-linkage 
           linkage
           extended-cenv
           (append-instruction-sequences 
-           (make-instruction-sequence `(,(make-PushEnvironment n #f)))
-           (apply append-instruction-sequences rhs-codes)
+           (make-instruction-sequence `(,(make-PushEnvironment n (LetVoid-boxes? exp))))
            body-code
            after-body-code
            (make-instruction-sequence `(,(make-PopEnvironment n 0)))
            after-let))))
 
-(: compile-letrec (LetRec CompileTimeEnvironment Target Linkage -> InstructionSequence))
-(define (compile-letrec exp cenv target linkage)
-  (let*: ([n : Natural (length (LetRec-rhss exp))]
-          [rhs-codes : (Listof InstructionSequence)
-                     (map (lambda: ([rhs : ExpressionCore]
-                                    [i : Natural]
-                                    [name : Symbol])
-                                   (parameterize ([current-defined-name name])
-                                     (compile rhs
-                                              (extend-lexical-environment/boxed-names cenv 
-                                                                                      (LetRec-names exp))
-                                              (make-EnvLexicalReference i #t)
-                                              'next)))
-                          (LetRec-rhss exp)
-                          (build-list n (lambda: ([i : Natural]) i))
-                          (LetRec-names exp))]
-          [after-letrec : Symbol (make-label 'afterLetRec)]
-          [after-body-code : Symbol (make-label 'afterLetBody)]
-          [extended-cenv : CompileTimeEnvironment
-                         (extend-lexical-environment/boxed-names cenv (LetRec-names exp))]
-          [let-linkage : Linkage
-                       (cond
-                         [(eq? linkage 'next)
-                          'next]
-                         [(eq? linkage 'return)
-                          'return]
-                         [(symbol? linkage)
-                          after-body-code])]
-          [body-target : Target (adjust-target-depth target n)]
-          [body-code : InstructionSequence
-                     (compile (LetRec-body exp) extended-cenv body-target let-linkage)])
-         (end-with-linkage 
-          linkage
-          extended-cenv
-          (append-instruction-sequences
-           (make-instruction-sequence `(,(make-PushEnvironment n #t)))
-           (apply append-instruction-sequences rhs-codes)
-           body-code
-           after-body-code
-           (make-instruction-sequence `(,(make-PopEnvironment n 0)))
-           after-letrec))))
+
+(: compile-install-value (InstallValue Natural Target Linkage -> InstructionSequence))
+(define (compile-install-value exp cenv target linkage)
+  (compile (InstallValue-body exp)
+           cenv
+           (make-EnvLexicalReference (InstallValue-depth exp) (InstallValue-box? exp))
+           linkage))
 
 
-(: adjust-target-depth (Target Natural -> Target))
-(define (adjust-target-depth target n)
-  (cond
-    [(eq? target 'val)
-     target]
-    [(eq? target 'proc)
-     target]
-    [(EnvLexicalReference? target)
-     (make-EnvLexicalReference (+ n (EnvLexicalReference-depth target))
-                               (EnvLexicalReference-unbox? target))]
-    [(EnvPrefixReference? target)
-     (make-EnvPrefixReference (+ n (EnvPrefixReference-depth target))
-                              (EnvPrefixReference-pos target))]
-    [(PrimitivesReference? target)
-     target]))
 
+(: compile-box-environment-value (BoxEnv Natural Target Linkage -> InstructionSequence))
+(define (compile-box-environment-value exp cenv target linkage)
+   (append-instruction-sequences
+    (make-instruction-sequence 
+     `(,(make-AssignPrimOpStatement (make-EnvLexicalReference (BoxEnv-depth exp) #f)
+                                    (make-MakeBoxedEnvironmentValue (BoxEnv-depth exp)))))
+    (compile (BoxEnv-body exp) cenv target linkage)))
 
 
 (: append-instruction-sequences (InstructionSequence * -> InstructionSequence))
@@ -643,6 +494,7 @@
       (append-2-sequences (car seqs)
                           (append-seq-list (cdr seqs)))))
 
+
 (: ensure-natural (Integer -> Natural))
 (define (ensure-natural n)
   (if (>= n 0)
@@ -650,3 +502,19 @@
       (error 'ensure-natural "Not a natural: ~s\n" n)))
 
 
+
+(: adjust-target-depth (Target Natural -> Target))
+(define (adjust-target-depth target n)
+  (cond
+    [(eq? target 'val)
+     target]
+    [(eq? target 'proc)
+     target]
+    [(EnvLexicalReference? target)
+     (make-EnvLexicalReference (+ n (EnvLexicalReference-depth target))
+                               (EnvLexicalReference-unbox? target))]
+    [(EnvPrefixReference? target)
+     (make-EnvPrefixReference (+ n (EnvPrefixReference-depth target))
+                              (EnvPrefixReference-pos target))]
+    [(PrimitivesReference? target)
+     target]))

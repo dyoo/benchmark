@@ -1,6 +1,8 @@
 #lang typed/racket/base
 (provide (all-defined-out))
 
+(require "lexical-structs.rkt")
+
 
 
 
@@ -40,24 +42,12 @@
   #:transparent)
 (define-struct: Const ([const : Any])
   #:transparent)
-(define-struct: EnvLexicalReference ([depth : Natural]
-                                     [unbox? : Boolean])
-  #:transparent)
-(define-struct: EnvPrefixReference ([depth : Natural]
-                                    [pos : Natural])
-  #:transparent)
-(define-struct: EnvWholePrefixReference ([depth : Natural])
-  #:transparent)
+
 
 
 (define-struct: PrimitivesReference ([name : Symbol])
   #:transparent)
 
-
-
-;; An environment reference is either lexical or referring to a whole prefix.
-(define-type EnvReference (U EnvLexicalReference
-                             EnvWholePrefixReference))
 
 
 
@@ -127,6 +117,7 @@
                                   MakeCompiledProcedure
                                   ApplyPrimitiveProcedure
                                   GetControlStackLabel
+                                  MakeBoxedEnvironmentValue
 
                                   CaptureEnvironment
                                   CaptureControl
@@ -141,7 +132,7 @@
 ;; closure needs to close over.
 (define-struct: MakeCompiledProcedure ([label : Symbol]
                                        [arity : Natural]
-                                       [closed-vals : (Listof EnvReference)]
+                                       [closed-vals : (Listof Natural)]
                                        [display-name : (U Symbol False)])
   #:transparent)
 
@@ -159,6 +150,10 @@
 ;; Gets the return address embedded at the top of the control stack.
 (define-struct: GetControlStackLabel ()
   #:transparent)
+
+(define-struct: MakeBoxedEnvironmentValue ([depth : Natural])
+  #:transparent)
+
 
 ;; Capture the current environment, skipping skip frames.
 (define-struct: CaptureEnvironment ([skip : Natural]))
@@ -187,8 +182,7 @@
 ;; Check that the value in the prefix has been defined.
 ;; If not, raise an error and stop evaluation.
 (define-struct: CheckToplevelBound! ([depth : Natural]
-                                     [pos : Natural]
-                                     [name : Symbol])
+                                     [pos : Natural])
   #:transparent)
 
 ;; Check the closure procedure value in 'proc and make sure it can accept n values.

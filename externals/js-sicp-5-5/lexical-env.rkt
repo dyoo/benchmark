@@ -1,21 +1,23 @@
 #lang typed/racket/base
 
 (require racket/list
-         "il-structs.rkt"
          "lexical-structs.rkt"
          "sets.rkt")
 (provide find-variable 
          extend-lexical-environment
          extend-lexical-environment/names
+         extend-lexical-environment/parameter-names
          extend-lexical-environment/boxed-names
          extend-lexical-environment/placeholders
+         
          collect-lexical-references
          lexical-references->compile-time-environment
-         place-prefix-mask)
+         place-prefix-mask
+         adjust-env-reference-depth
+         env-reference-depth)
 
 
-;; find-variable: symbol compile-time-environment -> lexical-address
-;; Find where the variable should be located.
+;; Find where the variable is located in the lexical environment
 (: find-variable (Symbol CompileTimeEnvironment -> LexicalAddress))
 (define (find-variable name cenv)
   (: find-pos (Symbol (Listof (U Symbol False)) -> Natural))
@@ -25,30 +27,25 @@
        0]
       [else
        (add1 (find-pos sym (cdr los)))]))
-  (let: loop : LexicalAddress ([cenv : CompileTimeEnvironment cenv]
-                               [depth : Natural 0])
+  (let: loop : LexicalAddress
+        ([cenv : CompileTimeEnvironment cenv]
+         [depth : Natural 0])
         (cond [(empty? cenv)
-               (error 'find-variable "Unable to find ~s in the environment" name)]
+               (error 'find-variable "~s not in lexical environment" name)]
               [else
                (let: ([elt : CompileTimeEnvironmentEntry (first cenv)])
                  (cond
                    [(Prefix? elt)
                     (cond [(member name (Prefix-names elt))
-                           (make-PrefixAddress depth (find-pos name (Prefix-names elt)) name)]
+                           (make-EnvPrefixReference depth 
+                                                    (find-pos name (Prefix-names elt)))]
                           [else
                            (loop (rest cenv) (add1 depth))])]
                    
-                   [(symbol? elt)
+                   [(NamedBinding? elt)
                     (cond
-                      [(eq? elt name)
-                       (make-LocalAddress depth #f)]
-                      [else
-                       (loop (rest cenv) (add1 depth))])]
-
-                   [(box? elt)
-                    (cond
-                      [(eq? (unbox elt) name)
-                       (make-LocalAddress depth #t)]
+                      [(eq? (NamedBinding-name elt) name)
+                       (make-EnvLexicalReference depth (NamedBinding-boxed? elt))]
                       [else
                        (loop (rest cenv) (add1 depth))])]
                    
@@ -77,14 +74,24 @@
 
 
 
-(: extend-lexical-environment/names (CompileTimeEnvironment (Listof Symbol) -> CompileTimeEnvironment))
-(define (extend-lexical-environment/names cenv names)
-  (append names cenv))
+(: extend-lexical-environment/names (CompileTimeEnvironment (Listof Symbol) (Listof Boolean) ->
+                                                            CompileTimeEnvironment))
+(define (extend-lexical-environment/names cenv names boxed?)
+  (append (map (lambda: ([n : Symbol]
+                         [b : Boolean]) (make-NamedBinding n #f b)) names boxed?)
+          cenv))
 
+(: extend-lexical-environment/parameter-names (CompileTimeEnvironment (Listof Symbol) (Listof Boolean) -> CompileTimeEnvironment))
+(define (extend-lexical-environment/parameter-names cenv names boxed?)
+  (append (map (lambda: ([n : Symbol]
+                         [b : Boolean]) 
+                        (make-NamedBinding n #t b)) names boxed?) 
+          cenv))
 
 (: extend-lexical-environment/boxed-names (CompileTimeEnvironment (Listof Symbol) -> CompileTimeEnvironment))
 (define (extend-lexical-environment/boxed-names cenv names)
-  (append (map (inst box Symbol) names) cenv))
+  (append (map (lambda: ([n : Symbol]) (make-NamedBinding n #f #t)) names)
+          cenv))
 
 
 (: extend-lexical-environment/placeholders
@@ -113,14 +120,13 @@
                 [else
                  (let ([addr (first addresses)])
                    (cond
-                     [(LocalAddress? addr)
+                     [(EnvLexicalReference? addr)
                       (set-insert! lexical-references
-                                   (make-EnvLexicalReference (LocalAddress-depth addr)
-                                                             (LocalAddress-unbox? addr)))
+                                   addr)
                       (loop (rest addresses))]
-                     [(PrefixAddress? addr)
+                     [(EnvPrefixReference? addr)
                       (set-insert! prefix-references
-                                   (make-EnvWholePrefixReference (PrefixAddress-depth addr)))
+                                   (make-EnvWholePrefixReference (EnvPrefixReference-depth addr)))
                       (loop (rest addresses))]))]))))
 
 
@@ -168,3 +174,28 @@
                             #f)]
                        [else n]))
         (Prefix-names a-prefix))))
+
+
+
+(: adjust-env-reference-depth (EnvReference Natural -> EnvReference))
+(define (adjust-env-reference-depth target n)
+  (cond
+    [(EnvLexicalReference? target)
+     (make-EnvLexicalReference (+ n (EnvLexicalReference-depth target))
+                               (EnvLexicalReference-unbox? target))]
+    [(EnvPrefixReference? target)
+     (make-EnvPrefixReference (+ n (EnvPrefixReference-depth target))
+                              (EnvPrefixReference-pos target))]
+    [(EnvWholePrefixReference? target)
+     (make-EnvWholePrefixReference (+ n (EnvWholePrefixReference-depth target)))]))
+
+
+(: env-reference-depth ((U EnvLexicalReference EnvPrefixReference EnvWholePrefixReference) -> Natural))
+(define (env-reference-depth a-ref)
+  (cond
+    [(EnvLexicalReference? a-ref)
+     (EnvLexicalReference-depth a-ref)]
+    [(EnvPrefixReference? a-ref)
+     (EnvPrefixReference-depth a-ref)]
+    [(EnvWholePrefixReference? a-ref)
+     (EnvWholePrefixReference-depth a-ref)]))

@@ -13,15 +13,17 @@
   #:transparent)
 
 
+(define-struct: NamedBinding ([name : Symbol]
+                              [parameter? : Boolean]
+                              [boxed? : Boolean])
+  #:transparent)
 
 
 (define-type CompileTimeEnvironmentEntry (U Prefix ;; a prefix
-                                            Symbol
-                                            (Boxof Symbol) ;; A boxed local
-                                            False
-                                            #;FunctionExtension
-                                            #;LocalExtension
-                                            #;TemporaryExtension))
+                                            NamedBinding
+                                            False))
+
+
 
 
 ;; A compile-time environment is a (listof (listof symbol)).
@@ -29,11 +31,21 @@
 (define-type CompileTimeEnvironment (Listof CompileTimeEnvironmentEntry))
 
 ;; A lexical address is a reference to an value in the environment stack.
-(define-type LexicalAddress (U LocalAddress PrefixAddress))
-(define-struct: LocalAddress ([depth : Natural]
-                              [unbox? : Boolean])
+(define-type LexicalAddress (U EnvLexicalReference EnvPrefixReference))
+
+
+(define-struct: EnvLexicalReference ([depth : Natural]
+                                     [unbox? : Boolean])
   #:transparent)
-(define-struct: PrefixAddress ([depth : Natural]
-                               [pos : Natural]
-                               [name : Symbol])
+
+(define-struct: EnvPrefixReference ([depth : Natural]
+                                    [pos : Natural])
   #:transparent)
+
+(define-struct: EnvWholePrefixReference ([depth : Natural])
+  #:transparent)
+
+
+;; An environment reference is either lexical or referring to a whole prefix.
+(define-type EnvReference (U EnvLexicalReference
+                             EnvWholePrefixReference))

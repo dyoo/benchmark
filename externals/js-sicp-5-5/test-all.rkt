@@ -1,9 +1,10 @@
 #lang racket
 
-(require "test-find-toplevel-variables.rkt"
+(require "test-parse.rkt"
          "test-simulator.rkt"
          "test-compiler.rkt"
          "test-assemble.rkt"
          "test-browser-evaluate.rkt"
          "test-package.rkt"
-         #;"test-conform.rkt")
+         "test-conform-browser.rkt")
+#;"test-conform.rkt"

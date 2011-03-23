@@ -647,6 +647,72 @@
 	     
 
 
+(test '(begin (define counter 0)
+              (set! counter (add1 counter))
+              counter)
+      1)
+
+(test '(begin (define x 16)
+              (define (f x)
+                (set! x (add1 x))
+                x)
+              (list (f 3)
+                    (f 4)
+                    x))
+      (list 4 5 16))
+      
+
+
+(test '(begin (define a '(hello))
+              (define b '(world))
+              (define reset!
+                (lambda ()
+                  (set! a '())))
+              (reset!)
+              (list a b))
+      '(() (world)))
+
+
+(test '(begin (define a '(hello))
+              (define b '(world))
+              (define reset!
+                (lambda ()
+                  (set! b '())))
+              (reset!)
+              (list a b))
+      '((hello) ()))
+
+(test '(begin (define a '(hello))
+              (define b '(world))
+              (define reset!
+                (lambda ()
+                  (set! a '())
+                  'ok))
+              (list a b (reset!) a b))
+      '((hello) (world) ok () (world)))
+
+(test '(begin (define a '(hello))
+              (define b '(world))
+              (define reset!
+                (lambda ()
+                  (set! b '())
+                  'ok))
+              (reset!)
+              (list a b))
+      '((hello)()))
+
+
+(test '(begin (define a '(hello))
+              (define b '(world))
+              (define reset!
+                (lambda ()
+                  (set! a '())
+                  (set! b '())))
+              (reset!)
+              (list a b))
+      '(()()))
+
+
 #;(test (read (open-input-file "tests/conform/program0.sch"))
       (port->string (open-input-file "tests/conform/expected0.txt")))
 
