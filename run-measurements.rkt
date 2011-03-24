@@ -86,4 +86,6 @@
   (parameterize ([current-directory this-path])
     (for ([platform platforms])
       (printf "    ~a...\n" (platform-name platform))
-      (save-measurement! ((platform-runner platform) (program-dir program) (program-name program))))))
+      (with-handlers ([void (lambda (err)
+					 (printf "        Error occurred: ~s.\n" err))])
+	 (save-measurement! ((platform-runner platform) (program-dir program) (program-name program)))))))

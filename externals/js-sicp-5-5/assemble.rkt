@@ -26,7 +26,8 @@
                        (displayln (assemble-basic-block basic-block) op)
                        (newline op))
               basic-blocks)
-    (fprintf op "MACHINE.params.currentErrorHandler = function(e) { fail(e); };\n")
+    (fprintf op "MACHINE.params.currentErrorHandler = fail;\n")
+    (fprintf op "MACHINE.params.currentSuccessHandler = success;\n")
     (fprintf op #<<EOF
 for (param in params) {
     if (params.hasOwnProperty(param)) {
@@ -35,7 +36,7 @@ for (param in params) {
 }
 EOF
              )
-    (fprintf op "trampoline(MACHINE, ~a, function() {success(MACHINE.val)}, fail); })"
+    (fprintf op "trampoline(MACHINE, ~a); })"
              (BasicBlock-name (first basic-blocks)))))
 
 
