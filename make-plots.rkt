@@ -35,30 +35,46 @@
 EOF
   )
 
+
 (define (make-graph-link name)
-  (let ([graph-text #<<EOF
+  (let* ([program-data (second (assoc name analyzed-points))]
+         [op (open-output-string)]
+         [platforms (unique-strings (map analyzed-point-platform program-data))]
+         [template #<<EOF
     <div>
     <h1>~a</h1>
     <iframe src="~a.html" width="~a" height="~a"></iframe>
     <p><small>(smaller is better)</small></p>
     <pre>
-~a
-    </pre>
-    </div>
 EOF
-                    ])
-    (format graph-text
-            name name
-            plot-width
-            plot-height
-            (string-join (map (lambda (p)
-                                (format "Day ~a: ~a took ~a times longer than racket"
-                                        (analyzed-point-day p)
-                                        (analyzed-point-platform p)
-                                        (analyzed-point-times-slower p)))
-                              (second (assoc name analyzed-points)))
-                         "\n")
-            )))
+                   ])
+    (fprintf op template
+             name name
+             plot-width
+             plot-height)
+    
+    (for ([platform platforms])
+      (let ([filtered-points (filter (lambda (p) (string=? (analyzed-point-platform p) platform))
+                                     program-data)])
+        (define previous-p #f)
+        (for ([p filtered-points])
+          (fprintf op "Day ~a: ~a took ~a times longer than racket~a\n"
+                   (analyzed-point-day p)
+                   (analyzed-point-platform p)
+                   (analyzed-point-times-slower p)
+                   (if previous-p 
+                       (format " (~a)" (add-sign (- (analyzed-point-times-slower p)
+                                                    (analyzed-point-times-slower previous-p))))
+                       ""))
+          (set! previous-p p)))
+      (fprintf op "\n"))
+    (fprintf op "</pre></div>")
+    (get-output-string op)))
+
+(define (add-sign n)
+  (if (> n 0)
+      (format "+~a" n)
+      (format "~a" n)))
 
 
 (define-runtime-path measurements "data/measurements")
