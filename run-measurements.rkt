@@ -30,7 +30,7 @@
 
 (define-struct platform (name runner))
 (define all-platforms (list (make-platform "racket" racket:run)
-                            (make-platform "simulator" simulator:run)
+                            #;(make-platform "simulator" simulator:run)
                             (make-platform "js-vm" js-vm:run)
                             (make-platform "browser" browser:run)))
 
