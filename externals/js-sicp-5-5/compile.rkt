@@ -14,7 +14,7 @@
 
 ;; We try to keep at compile time a mapping from environment positions to
 ;; statically known things, to generate better code.
-(define-struct: StaticallyKnownLam ([entry : Symbol]
+(define-struct: StaticallyKnownLam ([entry-point : Symbol]
                                     [arity : Natural]) #:transparent)
 (define-type CompileTimeEnvironmentEntry (U '? 'prefix StaticallyKnownLam))
 (define-type CompileTimeEnvironment (Listof CompileTimeEnvironmentEntry))
@@ -39,17 +39,20 @@
                                             target 
                                             linkage)))))
 
+(define-struct: lam+cenv ([lam : Lam]
+                          [cenv : CompileTimeEnvironment]))
 
 
-
-
-(: collect-all-lams (ExpressionCore -> (Listof Lam)))
+(: collect-all-lams (ExpressionCore -> (Listof lam+cenv)))
 ;; Finds all the lambdas in the expression.
 (define (collect-all-lams exp)
-  (let: loop : (Listof Lam) ([exp : ExpressionCore exp])
+  (let: loop : (Listof lam+cenv)
+        ([exp : ExpressionCore exp]
+         [cenv : CompileTimeEnvironment '()])
+       
         (cond
           [(Top? exp)
-           (loop (Top-code exp))]
+           (loop (Top-code exp) (cons 'prefix cenv))]
           [(Constant? exp)
            '()]
           [(LocalRef? exp)
@@ -57,33 +60,60 @@
           [(ToplevelRef? exp)
            '()]
           [(ToplevelSet? exp)
-           (loop (ToplevelSet-value exp))]
+           (loop (ToplevelSet-value exp) cenv)]
           [(Branch? exp)
-           (append (loop (Branch-predicate exp))
-                   (loop (Branch-consequent exp))
-                   (loop (Branch-alternative exp)))]
+           (append (loop (Branch-predicate exp) cenv)
+                   (loop (Branch-consequent exp) cenv)
+                   (loop (Branch-alternative exp) cenv))]
           [(Lam? exp)
-           (cons exp (loop (Lam-body exp)))]
+           (cons (make-lam+cenv exp cenv)
+                 (loop (Lam-body exp) 
+                       (extract-lambda-cenv exp cenv)))]
           [(Seq? exp)
-           (apply append (map loop (Seq-actions exp)))]
+           (apply append (map (lambda: ([e : ExpressionCore]) (loop e cenv))
+                              (Seq-actions exp)))]
           [(App? exp)
-           (append (loop (App-operator exp))
-                   (apply append (map loop (App-operands exp))))]
+           (let ([new-cenv (append (build-list (length (App-operands exp)) (lambda: ([i : Natural]) '?))
+                                   cenv)])
+             (append (loop (App-operator exp) new-cenv)
+                     (apply append (map (lambda: ([e : ExpressionCore]) (loop e new-cenv)) (App-operands exp)))))]
           [(Let1? exp)
-           (append (loop (Let1-rhs exp))
-                   (loop (Let1-body exp)))]
+           (append (loop (Let1-rhs exp)
+                         (cons '? cenv))
+                   (loop (Let1-body exp) 
+                         (cons (extract-static-knowledge (Let1-rhs exp) (cons '? cenv)) 
+                               cenv)))]
           [(LetVoid? exp)
-           (loop (LetVoid-body exp))]
+           (loop (LetVoid-body exp) 
+                 (append (build-list (LetVoid-count exp) (lambda: ([i : Natural]) '?))
+                         cenv))]
           [(InstallValue? exp)
-           (loop (InstallValue-body exp))]
+           (loop (InstallValue-body exp) cenv)]
           [(BoxEnv? exp)
-           '()])))
+           '()]
+          [(LetRec? exp)
+           (let ([new-cenv (append (map (lambda: ([p : Lam]) 
+                                          (extract-static-knowledge 
+                                           p 
+                                           (append (build-list (length (LetRec-procs exp))
+                                                               (lambda: ([i : Natural]) '?))
+                                                   cenv)))
+                                        (reverse (LetRec-procs exp)))
+                                   cenv)])
+             (append (apply append 
+                            (map (lambda: ([lam : Lam])
+                                          (loop lam new-cenv))
+                                 (LetRec-procs exp)))
+                     (loop (LetRec-body exp) new-cenv)))])))
          
     
 
-
-
-
+(: extract-lambda-cenv (Lam CompileTimeEnvironment -> CompileTimeEnvironment))
+(define (extract-lambda-cenv lam cenv)
+  (append (map (lambda: ([d : Natural])
+                        (list-ref cenv d))
+               (Lam-closure-map lam))
+          (build-list (Lam-num-parameters lam) (lambda: ([i : Natural]) '?))))
 
 
 
@@ -121,7 +151,9 @@
     [(InstallValue? exp)
      (compile-install-value exp cenv target linkage)]
     [(BoxEnv? exp)
-     (compile-box-environment-value exp cenv target linkage)]))
+     (compile-box-environment-value exp cenv target linkage)]
+    [(LetRec? exp)
+     (compile-let-rec exp cenv target linkage)]))
 
 
 
@@ -284,30 +316,33 @@
                                     (Lam-closure-map exp)
                                     (Lam-name exp)))))))
 
-(: compile-lambda-body (Lam -> InstructionSequence))
+(: compile-lambda-body (Lam CompileTimeEnvironment -> InstructionSequence))
 ;; Compiles the body of the lambda in the appropriate environment.
-(define (compile-lambda-body exp)
+(define (compile-lambda-body exp cenv)
   (append-instruction-sequences
    (make-instruction-sequence 
     `(,(Lam-entry-label exp)
       ,(make-PerformStatement (make-InstallClosureValues!))))
    (compile (Lam-body exp)
-            (build-list (+ (Lam-num-parameters exp)
-                           (length (Lam-closure-map exp)))
-                        (lambda: ([i : Natural]) '?))
+            (append (map (lambda: ([d : Natural]) 
+                                  (list-ref cenv d))
+                         (Lam-closure-map exp))
+                    ;; fixme: We need to capture the cenv so we can maintain static knowledge
+                    (build-list (Lam-num-parameters exp) (lambda: ([i : Natural]) '?)))
             'val
             'return)))
 
 
 
-(: compile-lambda-bodies ((Listof Lam) -> InstructionSequence))
+(: compile-lambda-bodies ((Listof lam+cenv) -> InstructionSequence))
 ;; Compile several lambda bodies, back to back.
 (define (compile-lambda-bodies exps)
   (cond
     [(empty? exps)
      (make-instruction-sequence '())]
     [else
-     (append-instruction-sequences (compile-lambda-body (first exps))
+     (append-instruction-sequences (compile-lambda-body (lam+cenv-lam (first exps))
+                                                        (lam+cenv-cenv (first exps)))
                                    (compile-lambda-bodies (rest exps)))]))
 
 
@@ -367,13 +402,15 @@
               (default)]
              [(StaticallyKnownLam? static-knowledge)
               ;; Currently disabling the static analysis stuff till I get error trapping working first.
-              (default)
-              #;(unless (= n (StaticallyKnownLam-arity static-knowledge))
-                (error 'arity-mismatch "Expected ~s, received ~s" (StaticallyKnownLam-arity static-knowledge)
+              #;(default)
+              (unless (= n (StaticallyKnownLam-arity static-knowledge))
+                (error 'arity-mismatch "Expected ~s, received ~s" 
+                       (StaticallyKnownLam-arity static-knowledge)
                        n))
               ;; FIXME: do the arity check here...
-              #;(printf "I'm here!\n")
-              #;(compile-procedure-call/statically-known-lam extended-cenv 
+              #;(printf "I'm here with ~s\n" static-knowledge)
+              (compile-procedure-call/statically-known-lam static-knowledge 
+                                                           extended-cenv 
                                                            n
                                                            target
                                                            linkage)]))]
@@ -433,7 +470,7 @@
        (end-with-compiled-application-linkage 
         compiled-linkage
         extended-cenv
-        (compile-proc-appl extended-cenv n target compiled-linkage))
+        (compile-proc-appl extended-cenv (make-Reg 'val) n target compiled-linkage))
        
        primitive-branch
        (end-with-linkage
@@ -452,22 +489,30 @@
 
 
 (: compile-procedure-call/statically-known-lam 
-   (CompileTimeEnvironment Natural Target Linkage -> InstructionSequence))
-(define (compile-procedure-call/statically-known-lam extended-cenv n target linkage)
-  (end-with-compiled-application-linkage 
-   linkage
-   extended-cenv
-   (compile-proc-appl extended-cenv n target linkage)))
+   (StaticallyKnownLam CompileTimeEnvironment Natural Target Linkage -> InstructionSequence))
+(define (compile-procedure-call/statically-known-lam static-knowledge extended-cenv n target linkage)
+  (let* ([after-call (make-label 'afterCall)]
+         [compiled-linkage (if (eq? linkage 'next) after-call linkage)])
+    (append-instruction-sequences
+     (end-with-compiled-application-linkage 
+      compiled-linkage
+      extended-cenv
+      (compile-proc-appl extended-cenv 
+                         (make-Label (StaticallyKnownLam-entry-point static-knowledge))
+                         n 
+                         target
+                         compiled-linkage))
+     after-call)))
+    
 
 
-
-(: compile-proc-appl (CompileTimeEnvironment Natural Target Linkage -> InstructionSequence))
+(: compile-proc-appl (CompileTimeEnvironment (U Label Reg) Natural Target Linkage -> InstructionSequence))
 ;; Three fundamental cases for general compiled-procedure application.
 ;;    1.  Non-tail calls that write to val
 ;;    2.  Calls in argument position that write to the environment
 ;;    3.  Tail calls.
 ;; The Other cases should be excluded.
-(define (compile-proc-appl cenv-with-args n target linkage)
+(define (compile-proc-appl cenv-with-args entry-point n target linkage)
   (cond [(and (eq? target 'val)
               (not (eq? linkage 'return)))
          ;; This case happens for a function call that isn't in
@@ -475,7 +520,7 @@
          (make-instruction-sequence 
           `(,(make-PushControlFrame linkage)
             ,(make-AssignPrimOpStatement 'val (make-GetCompiledProcedureEntry))
-            ,(make-GotoStatement (make-Reg 'val))))]
+            ,(make-GotoStatement entry-point)))]
         
         [(and (not (eq? target 'val))
               (not (eq? linkage 'return)))
@@ -485,7 +530,7 @@
            (make-instruction-sequence
             `(,(make-PushControlFrame proc-return)
               ,(make-AssignPrimOpStatement 'val (make-GetCompiledProcedureEntry))
-              ,(make-GotoStatement (make-Reg 'val))
+              ,(make-GotoStatement entry-point)
               ,proc-return
               ,(make-AssignImmediateStatement target (make-Reg 'val))
               ,(make-GotoStatement (make-Label linkage)))))]
@@ -500,7 +545,7 @@
                                          (make-GetCompiledProcedureEntry))
             ,(make-PopEnvironment (ensure-natural (- (length cenv-with-args) n))
                                   n)
-            ,(make-GotoStatement (make-Reg 'val))))]
+            ,(make-GotoStatement entry-point)))]
         
         [(and (not (eq? target 'val))
               (eq? linkage 'return))
@@ -510,12 +555,14 @@
          (error 'compile "return linkage, target not val: ~s" target)]))
          
 
-(: extract-static-knowledge (ExpressionCore ->  CompileTimeEnvironmentEntry))
-(define (extract-static-knowledge exp)
+(: extract-static-knowledge (ExpressionCore CompileTimeEnvironment ->  CompileTimeEnvironmentEntry))
+(define (extract-static-knowledge exp cenv)
   (cond
     [(Lam? exp)
      (make-StaticallyKnownLam (Lam-entry-label exp)
                               (Lam-num-parameters exp))]
+    [(LocalRef? exp)
+     (list-ref cenv (LocalRef-depth exp))]
     [else
      '?]))
 
@@ -529,7 +576,9 @@
                              'next)]
           [after-let1 : Symbol (make-label 'afterLetOne)]
           [after-body-code : Symbol (make-label 'afterLetBody)]
-          [extended-cenv : CompileTimeEnvironment (cons (extract-static-knowledge (Let1-rhs exp)) cenv)]
+          [extended-cenv : CompileTimeEnvironment (cons (extract-static-knowledge (Let1-rhs exp)
+                                                                                  (cons '? cenv))
+                                                        cenv)]
           [let-linkage : Linkage
                        (cond
                          [(eq? linkage 'next)
@@ -582,6 +631,62 @@
            after-body-code
            (make-instruction-sequence `(,(make-PopEnvironment n 0)))
            after-let))))
+
+
+
+(: compile-let-rec (LetRec CompileTimeEnvironment Target Linkage -> InstructionSequence))
+(define (compile-let-rec exp cenv target linkage)
+  (let*: ([extended-cenv : CompileTimeEnvironment (append (map (lambda: ([p : Lam])
+                                                                 (extract-static-knowledge 
+                                                                  p
+                                                                  (append (build-list (length (LetRec-procs exp))
+                                                                                      (lambda: ([i : Natural])
+                                                                                               '?))
+                                                                          cenv)))
+                                                              (reverse (LetRec-procs exp)))
+                                                         cenv)]
+         [n : Natural (length (LetRec-procs exp))]
+         [after-body-code : Linkage (make-label 'afterBodyCode)]
+         [letrec-linkage : Linkage (cond
+                                     [(eq? linkage 'next)
+                                      'next]
+                                     [(eq? linkage 'return)
+                                      'return]
+                                     [(symbol? linkage)
+                                      after-body-code])])
+        (end-with-linkage
+         linkage
+         extended-cenv
+         (append-instruction-sequences
+          (make-instruction-sequence `(,(make-PushEnvironment n #f)))
+          
+          ;; Install each of the closure shells
+          (apply append-instruction-sequences
+                 (map (lambda: ([lam : Lam]
+                                [i : Natural])
+                               (compile-lambda lam 
+                                               extended-cenv
+                                               (make-EnvLexicalReference i #f) 
+                                               'next))
+                      (LetRec-procs exp)
+                      (build-list n (lambda: ([i : Natural]) (ensure-natural (- n 1 i))))))
+          
+          ;; Fix the closure maps of each
+          (apply append-instruction-sequences
+                 (map (lambda: ([lam : Lam]
+                                [i : Natural])
+                               (make-instruction-sequence 
+                                `(,(make-PerformStatement 
+                                    (make-FixClosureShellMap! i (Lam-closure-map lam))))))
+                               
+                      (LetRec-procs exp)
+                      (build-list n (lambda: ([i : Natural]) (ensure-natural (- n 1 i))))))
+          
+          ;; Compile the body
+          (compile (LetRec-body exp) extended-cenv (adjust-target-depth target n) letrec-linkage)
+          after-body-code
+          (make-instruction-sequence `(,(make-PopEnvironment n 0)))))))
+  
 
 
 (: compile-install-value (InstallValue CompileTimeEnvironment Target Linkage -> InstructionSequence))
