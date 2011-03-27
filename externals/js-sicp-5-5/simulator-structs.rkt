@@ -2,7 +2,8 @@
 
 (provide (all-defined-out))
 
-(require "il-structs.rkt")
+(require "il-structs.rkt"
+         "lexical-structs.rkt")
 
 
 (define-type PrimitiveValue (Rec PrimitiveValue (U String Number Symbol Boolean
@@ -57,7 +58,7 @@
                        )
   #:transparent)
 
-(define-struct: toplevel ([names : (Listof (U #f Symbol))]
+(define-struct: toplevel ([names : (Listof (U #f Symbol ModuleVariable))]
                           [vals : (Listof PrimitiveValue)])
   #:transparent
   #:mutable)
@@ -67,7 +68,7 @@
 
 
 ;; Primitive procedure wrapper
-(define-struct: primitive-proc ([f : (machine Symbol PrimitiveValue * -> PrimitiveValue)])
+(define-struct: primitive-proc ([f : (machine PrimitiveValue * -> PrimitiveValue)])
   #:transparent)
 
 

@@ -53,8 +53,10 @@
 
 ;; instruction sequences
 (define-type UnlabeledStatement (U 
+                                 
                                  AssignImmediateStatement
                                  AssignPrimOpStatement
+                                 
                                  PerformStatement
                                  
                                  GotoStatement
@@ -116,12 +118,14 @@
 (define-type PrimitiveOperator (U GetCompiledProcedureEntry
                                   MakeCompiledProcedure
                                   ApplyPrimitiveProcedure
+
                                   GetControlStackLabel
                                   MakeBoxedEnvironmentValue
 
                                   CaptureEnvironment
                                   CaptureControl
-                                  ))
+                                  
+                                  CallKernelPrimitiveProcedure))
 
 ;; Gets the label from the closure stored in the 'proc register and returns it.
 (define-struct: GetCompiledProcedureEntry ()
@@ -139,12 +143,31 @@
 ;; Applies the primitive procedure that's stored in the proc register, using
 ;; the arity number of values that are bound in the environment as arguments
 ;; to that primitive.
-;; 
-;; If the primitive needs to capture the current continuation, it can get the
-;; immediate address at label.
-(define-struct: ApplyPrimitiveProcedure ([arity : Natural]
-                                         [label : Symbol])
+(define-struct: ApplyPrimitiveProcedure ([arity : Natural])
   #:transparent)
+
+
+
+;; The following are primitives that the compiler knows about:
+(define-type KernelPrimitiveName (U '+
+                                    'add1
+                                    'sub1
+                                    '<
+                                    '<=
+                                    '=
+                                    
+                                    'cons
+                                    'car
+                                    'cdr
+                                    'null?
+                                    ))
+(define-predicate KernelPrimitiveName? KernelPrimitiveName)
+
+
+(define-struct: CallKernelPrimitiveProcedure ([operator : KernelPrimitiveName]
+                                              [operands : (Listof OpArg)])
+  #:transparent)
+
 
 
 ;; Gets the return address embedded at the top of the control stack.
@@ -191,7 +214,7 @@
 
 ;; Extends the environment with a prefix that holds
 ;; lookups to the namespace.
-(define-struct: ExtendEnvironment/Prefix! ([names : (Listof (U Symbol False))])
+(define-struct: ExtendEnvironment/Prefix! ([names : (Listof (U Symbol ModuleVariable False))])
   #:transparent)
 
 ;; Adjusts the environment by pushing the values in the

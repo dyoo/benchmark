@@ -20,13 +20,16 @@
 ;; Find where the variable is located in the lexical environment
 (: find-variable (Symbol ParseTimeEnvironment -> LexicalAddress))
 (define (find-variable name cenv)
-  (: find-pos (Symbol (Listof (U Symbol False)) -> Natural))
+  (: find-pos (Symbol (Listof (U Symbol ModuleVariable False)) -> Natural))
   (define (find-pos sym los)
-    (cond
-      [(eq? sym (car los))
-       0]
-      [else
-       (add1 (find-pos sym (cdr los)))]))
+    (let ([elt (car los)])
+      (cond
+        [(and (symbol? elt) (eq? sym elt))
+         0]
+        [(and (ModuleVariable? elt) (eq? (ModuleVariable-name elt) sym))
+         0]
+        [else
+         (add1 (find-pos sym (cdr los)))])))
   (let: loop : LexicalAddress
         ([cenv : ParseTimeEnvironment cenv]
          [depth : Natural 0])
@@ -36,11 +39,20 @@
                (let: ([elt : ParseTimeEnvironmentEntry (first cenv)])
                  (cond
                    [(Prefix? elt)
-                    (cond [(member name (Prefix-names elt))
-                           (make-EnvPrefixReference depth 
-                                                    (find-pos name (Prefix-names elt)))]
-                          [else
-                           (loop (rest cenv) (add1 depth))])]
+                    (let: prefix-loop : LexicalAddress
+                          ([names : (Listof (U Symbol False ModuleVariable)) (Prefix-names elt)]
+                                       [pos : Natural 0])
+                          (cond [(empty? names)
+                                 (loop (rest cenv) (add1 depth))]
+                                [else
+                                 (let: ([n : (U Symbol False ModuleVariable) (first names)])
+                                       (cond
+                                         [(and (symbol? n) (eq? name n))
+                                          (make-EnvPrefixReference depth pos)]
+                                         [(and (ModuleVariable? n) (eq? name (ModuleVariable-name n)))
+                                          (make-EnvPrefixReference depth pos)]
+                                         [else
+                                          (prefix-loop (rest names) (add1 pos))]))]))]
                    
                    [(NamedBinding? elt)
                     (cond
@@ -167,9 +179,13 @@
 ;; Masks elements of the prefix off.
 (define (place-prefix-mask a-prefix symbols-to-keep)
   (make-Prefix
-   (map (lambda: ([n : (U Symbol False)])
+   (map (lambda: ([n : (U Symbol False ModuleVariable)])
                  (cond [(symbol? n)
                         (if (member n symbols-to-keep)
+                            n
+                            #f)]
+                       [(ModuleVariable? n)
+                        (if (member (ModuleVariable-name n) symbols-to-keep)
                             n
                             #f)]
                        [else n]))

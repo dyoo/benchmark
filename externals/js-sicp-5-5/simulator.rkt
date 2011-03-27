@@ -20,6 +20,7 @@
 (require/typed "simulator-helpers.rkt"
                [ensure-primitive-value-box (SlotValue -> (Boxof PrimitiveValue))]
                [ensure-primitive-value (SlotValue -> PrimitiveValue)]
+               [ensure-list (Any -> PrimitiveValue)]
                [racket->PrimitiveValue (Any -> PrimitiveValue)])
              
 
@@ -217,10 +218,13 @@
           [(ExtendEnvironment/Prefix!? op)
            (env-push! m 
                       (make-toplevel (ExtendEnvironment/Prefix!-names op)
-                                     (map (lambda: ([id/false : (U Symbol False)])
-                                                   (if (symbol? id/false)
-                                                       (lookup-primitive id/false)
-                                                       #f))
+                                     (map (lambda: ([name : (U Symbol ModuleVariable False)])
+                                                   (cond [(symbol? name)
+                                                          (lookup-primitive name)]
+                                                         [(ModuleVariable? name)
+                                                          (lookup-primitive (ModuleVariable-name name))]
+                                                         [(eq? name #f)
+                                                          (make-undefined)]))
                                           (ExtendEnvironment/Prefix!-names op))))]
           
           [(InstallClosureValues!? op)
@@ -309,7 +313,6 @@
                                                         (current-simulated-output-port)])
                                           (apply (primitive-proc-f prim)
                                                  m
-                                                 (ApplyPrimitiveProcedure-label op)
                                                  args))))]
                    [else
                     (error 'apply-primitive-procedure)]))]
@@ -325,9 +328,53 @@
                                                           (CaptureControl-skip op))))]
           [(MakeBoxedEnvironmentValue? op)
            (target-updater! m (box (ensure-primitive-value
-                                    (env-ref m (MakeBoxedEnvironmentValue-depth op)))))])))
+                                    (env-ref m (MakeBoxedEnvironmentValue-depth op)))))]
+          
+          [(CallKernelPrimitiveProcedure? op)
+           (target-updater! m (evaluate-kernel-primitive-procedure-call m op))])))
 
 
+(: evaluate-kernel-primitive-procedure-call (machine CallKernelPrimitiveProcedure -> PrimitiveValue))
+(define (evaluate-kernel-primitive-procedure-call m op)
+  (let: ([op : KernelPrimitiveName (CallKernelPrimitiveProcedure-operator op)]
+         [rand-vals : (Listof PrimitiveValue)
+                    (map (lambda: ([a : OpArg])
+                                  (ensure-primitive-value (evaluate-oparg m a)))
+                         (CallKernelPrimitiveProcedure-operands op))])
+        (case op
+          [(+)
+           (apply + (map ensure-number rand-vals))]
+          [(add1)
+           (add1 (ensure-number (first rand-vals)))]
+          [(sub1)
+           (sub1 (ensure-number (first rand-vals)))]
+          [(<)
+           (chain-compare < (map ensure-real-number rand-vals))]
+          [(<=)   
+           (chain-compare <= (map ensure-real-number rand-vals))]
+          [(=)
+           (chain-compare = (map ensure-real-number rand-vals))]
+          [(cons)
+           (make-MutablePair (first rand-vals) (ensure-list (second rand-vals)))]
+          [(car)
+           (MutablePair-h (ensure-mutable-pair (first rand-vals)))]
+          [(cdr)
+           (MutablePair-t (ensure-mutable-pair (first rand-vals)))]
+          [(null?)
+           (null? (first rand-vals))]
+          [else
+           (error 'evaluate-kernel-primitive-procedure-call "missing operator: ~s\n" op)])))
+
+(: chain-compare (All (A) (A A -> Boolean) (Listof A) -> Boolean))
+(define (chain-compare f vals)
+  (cond
+    [(empty? vals)
+     #t]
+    [(empty? (rest vals))
+     #t]
+    [else
+     (and (f (first vals) (second vals))
+          (chain-compare f (rest vals)))]))
 
 
 
@@ -422,6 +469,29 @@
   (if (>= x 0)
       x
       (error 'ensure-natural)))
+
+(: ensure-number (Any -> Number))
+(define (ensure-number x)
+  (if (number? x)
+      x
+      (error 'ensure-number "Not a number: ~s" x)))
+
+
+
+(: ensure-real-number (Any -> Real))
+(define (ensure-real-number x)
+  (if (real? x)
+      x
+      (error 'ensure-number "Not a number: ~s" x)))
+
+
+(: ensure-mutable-pair (Any -> MutablePair))
+(define (ensure-mutable-pair x)
+  (if (MutablePair? x)
+      x
+      (error 'ensure-mutable-pair "not a mutable pair: ~s" x)))
+
+
 
 (: ensure-CapturedControl (Any -> CapturedControl))
 (define (ensure-CapturedControl x)

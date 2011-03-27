@@ -132,7 +132,7 @@ EOF
       [(MakeCompiledProcedure? op)
        (list (MakeCompiledProcedure-label op))]
       [(ApplyPrimitiveProcedure? op)
-       (list (ApplyPrimitiveProcedure-label op))]
+       empty]
       [(GetControlStackLabel? op)
        empty]
       [(CaptureEnvironment? op)
@@ -140,6 +140,8 @@ EOF
       [(CaptureControl? op)
        empty]
       [(MakeBoxedEnvironmentValue? op)
+       empty]
+      [(CallKernelPrimitiveProcedure? op)
        empty]))
   
   (: collect-primitive-command (PrimitiveCommand -> (Listof Symbol)))
@@ -327,6 +329,8 @@ EOF
                "null"]
               [(empty? val)
                (format "Primitives.null")]
+              [(number? val)
+               (format "(~s)" val)]
               [else
                (format "~s" val)])))
 
@@ -386,21 +390,93 @@ EOF
              (assemble-display-name (MakeCompiledProcedure-display-name op)))]
     
     [(ApplyPrimitiveProcedure? op)
-     (format "MACHINE.proc(~a, ~a)"
-             (ApplyPrimitiveProcedure-arity op)
-             (ApplyPrimitiveProcedure-label op))]
+     (format "MACHINE.proc(MACHINE, ~a)"
+             (ApplyPrimitiveProcedure-arity op))]
     
     [(GetControlStackLabel? op)
      (format "MACHINE.control[MACHINE.control.length-1].label")]
+    
     [(CaptureEnvironment? op)
      (format "MACHINE.env.slice(0, MACHINE.env.length - ~a)"
              (CaptureEnvironment-skip op))]
+    
     [(CaptureControl? op)
      (format "MACHINE.control.slice(0, MACHINE.control.length - ~a)"
              (CaptureControl-skip op))]
+    
     [(MakeBoxedEnvironmentValue? op)
      (format "[MACHINE.env[MACHINE.env.length - 1 - ~a]]"
-             (MakeBoxedEnvironmentValue-depth op))]))
+             (MakeBoxedEnvironmentValue-depth op))]
+
+    [(CallKernelPrimitiveProcedure? op)
+     (open-code-kernel-primitive-procedure op)]))
+
+
+;; FIXME: this needs to check that the domains are good!
+(: open-code-kernel-primitive-procedure (CallKernelPrimitiveProcedure -> String))
+(define (open-code-kernel-primitive-procedure op)
+  (let: ([operator : KernelPrimitiveName (CallKernelPrimitiveProcedure-operator op)]
+         [rand-vals : (Listof String) (map assemble-input (CallKernelPrimitiveProcedure-operands op))])
+        (case operator
+          [(+)
+           (cond [(empty? rand-vals)
+                  "0"]
+                 [else
+                  (string-append "(" (string-join rand-vals " + ") ")")])]
+          [(add1)
+           (unless (= 1 (length rand-vals))
+             (error 'add1 "Expected one argument"))
+           (format "(~a + 1)" (first rand-vals))]
+          [(sub1)
+           (unless (= 1 (length rand-vals))
+             (error 'sub1 "Expected one argument"))
+           (format "(~a - 1)" (first rand-vals))]
+          [(<)
+           (unless (> (length rand-vals) 0)
+             (error '< "Expected at least one argument"))
+           (assemble-chain "<" rand-vals)]
+          [(<=)
+           (unless (> (length rand-vals) 0)
+             (error '<= "Expected at least one argument"))
+           (assemble-chain "<=" rand-vals)]
+          [(=)
+           (unless (> (length rand-vals) 0)
+             (error '= "Expected at least one argument"))
+           (assemble-chain "==" rand-vals)]
+          [(cons)
+           (unless (= (length rand-vals) 2)
+             (error 'cons "Expected two arguments"))
+           (format "[~a, ~a]" (first rand-vals) (second rand-vals))]
+          [(car)
+           (unless (= (length rand-vals) 1)
+             (error 'car "Expected one argument"))
+           (format "(~a)[0]" (first rand-vals))]
+          [(cdr)
+           (unless (= (length rand-vals) 1)
+             (error 'cdr "Expected one argument"))
+           (format "(~a)[1]" (first rand-vals))]
+          [(null?)
+           (unless (= (length rand-vals) 1)
+             (error 'null? "Expected one argument"))
+           (format "(~a === Primitives.null)"
+                   (first rand-vals))])))
+
+
+(: assemble-chain (String (Listof String) -> String))
+(define (assemble-chain rator rands)
+  (string-append "("
+                 (string-join (let: loop : (Listof String) ([rands : (Listof String) rands])
+                                (cond
+                                  [(empty? rands)
+                                   '()]
+                                  [(empty? (rest rands))
+                                   '()]
+                                  [else
+                                   (cons (format "(~a ~a ~a)" (first rands) rator (second rands))
+                                         (loop (rest rands)))]))
+                              "&&")
+                 ")"))
+
 
 
 (: assemble-op-statement (PrimitiveCommand -> String))
@@ -416,24 +492,31 @@ EOF
     
     [(CheckClosureArity!? op)
      (format "if (! (MACHINE.proc instanceof Closure && MACHINE.proc.arity === ~a)) { if (! (MACHINE.proc instanceof Closure)) { throw new Error(\"not a closure\"); } else { throw new Error(\"arity failure\"); } }"
-             (CheckClosureArity!-arity op)
-             )]
+             (CheckClosureArity!-arity op))]
     
     [(ExtendEnvironment/Prefix!? op)
-     (let: ([names : (Listof (U Symbol False)) (ExtendEnvironment/Prefix!-names op)])
+     (let: ([names : (Listof (U Symbol False ModuleVariable)) (ExtendEnvironment/Prefix!-names op)])
            (format "MACHINE.env.push([~a]);  MACHINE.env[MACHINE.env.length-1].names = [~a];"
-                   (string-join (map (lambda: ([n : (U Symbol False)])
-                                              (if (symbol? n)
-                                                  (format "MACHINE.params.currentNamespace[~s] || Primitives[~s]"
-                                                          (symbol->string n) 
-                                                          (symbol->string n))
-                                                  "false"))
+                   (string-join (map (lambda: ([n : (U Symbol False ModuleVariable)])
+                                              (cond [(symbol? n)
+                                                     (format "MACHINE.params.currentNamespace[~s] || Primitives[~s]"
+                                                             (symbol->string n) 
+                                                             (symbol->string n))]
+                                                    [(eq? n #f)
+                                                     "false"]
+                                                    [(ModuleVariable? n)
+                                                     (format "Primitives[~s]"
+                                                             (symbol->string (ModuleVariable-name n)))]))
                                      names)
                                 ",")
-                   (string-join (map (lambda: ([n : (U Symbol False)])
-                                              (if (symbol? n)
-                                                  (format "~s" (symbol->string n))
-                                                  "false"))
+                   (string-join (map (lambda: ([n : (U Symbol False ModuleVariable)])
+                                              (cond
+                                                [(symbol? n)
+                                                 (format "~s" (symbol->string n))]
+                                                [(eq? n #f)
+                                                 "false"]
+                                                [(ModuleVariable? n)
+                                                 (format "~s" (symbol->string (ModuleVariable-name n)))]))
                                      names)
                                 ",")))]
     
