@@ -4,11 +4,12 @@
          "simulator-structs.rkt"
          "simulator-helpers.rkt"
          "compile.rkt"
-         "parse.rkt")
+         "parse.rkt"
+         "il-structs.rkt")
 
 
 (define (run-compiler code)
-  (compile (parse code) 'val 'next))
+  (compile (parse code) 'val next-linkage))
   
 
 ;; Test out the compiler, using the simulator.
@@ -139,6 +140,14 @@
 (test '(/ 10 5)
       2)
 
+(test '(- 1 2)
+      -1)
+
+(test '(- 3)
+      -3)
+
+(test '(*)
+      1)
 
 ;; composition of square
 (test '(begin (define (f x)

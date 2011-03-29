@@ -159,15 +159,18 @@
 
 ;; The following are primitives that the compiler knows about:
 (define-type KernelPrimitiveName (U '+
+                                    '-
+                                    '*
+                                    '/
                                     'add1
                                     'sub1
                                     '<
                                     '<=
                                     '=
-                                    
                                     'cons
                                     'car
                                     'cdr
+                                    'list
                                     'null?
                                     ))
 (define-predicate KernelPrimitiveName? KernelPrimitiveName)
@@ -279,10 +282,19 @@
 
 
 
+
 ;; Linkage
-(define-type Linkage (U 'return 
-                        'next
-                        Symbol))
+(define-struct: NextLinkage ())
+(define next-linkage (make-NextLinkage))
+
+(define-struct: ReturnLinkage ())
+(define return-linkage (make-ReturnLinkage))
+
+(define-struct: LabelLinkage ([label : Symbol]))
+
+(define-type Linkage (U NextLinkage
+                        ReturnLinkage
+                        LabelLinkage))
 
 
 
