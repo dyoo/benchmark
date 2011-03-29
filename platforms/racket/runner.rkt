@@ -3,10 +3,10 @@
          "../../get-host-info.rkt")
 
 
-(provide run)
+(provide make-run)
 
-;; run: suite-path module-name -> measurement 
-(define (run suite-directory module-name)
+;; make-run: suite-path module-name -> measurement 
+(define ((make-run) suite-directory module-name)
   (let ([op (open-output-string)]
         [start-time #f])
     (parameterize ([current-directory suite-directory]

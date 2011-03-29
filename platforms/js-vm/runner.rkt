@@ -8,7 +8,7 @@
          racket/port
          racket/runtime-path)
 
-(provide run)
+(provide make-run)
 
 (define-runtime-path self-path "runner.rkt")
 
@@ -172,9 +172,6 @@ EOF
 
   
  
-(define evaluate (make-evaluate generate-javascript-and-run
-                                #:extra-head-code extra-head-code
-                                #:extra-files-paths (list tmp-htdocs)))
 
 
 (define (read-program suite-directory module-name)
@@ -188,10 +185,14 @@ EOF
              port->string)])))
 
 
-(define (run suite-directory module-name)
+(define (make-run)
+  (define evaluate (make-evaluate generate-javascript-and-run
+                                  #:extra-head-code extra-head-code
+                                  #:extra-files-paths (list tmp-htdocs)))
+    (lambda (suite-directory module-name)
   (let ([result (evaluate (read-program suite-directory module-name))])
     (make-measurement (current-seconds)
 		      (format "js-vm:~a" (evaluated-browser result))
                       module-name
                       (evaluated-t result)
-                      (evaluated-stdout result))))
+                      (evaluated-stdout result)))))

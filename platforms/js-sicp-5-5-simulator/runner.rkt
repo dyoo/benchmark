@@ -7,19 +7,9 @@
          "../../externals/js-sicp-5-5/simulator-structs.rkt")
 
 
-(provide run)
+(provide make-run)
 
 
-(define (evaluate program)
-  (let ([op (open-output-string)])
-    (parameterize ([current-simulated-output-port op])
-      (let* ([code (compile (parse program) 'val 'next)]
-	     [machine (new-machine code)])
-	(let ([start-time (current-inexact-milliseconds)])
-	  (step-to-completion! machine)
-	  (values (- (current-inexact-milliseconds) start-time)
-		  (get-output-string op)))))))
-  
 
 ;; Run the machine to completion.
 (define (step-to-completion! m)
@@ -43,7 +33,19 @@
 
 
 ;; run: suite-path module-name -> measurement 
-(define (run suite-directory module-name)
+(define (make-run) 
+
+(define (evaluate program)
+  (let ([op (open-output-string)])
+    (parameterize ([current-simulated-output-port op])
+      (let* ([code (compile (parse program) 'val 'next)]
+	     [machine (new-machine code)])
+	(let ([start-time (current-inexact-milliseconds)])
+	  (step-to-completion! machine)
+	  (values (- (current-inexact-milliseconds) start-time)
+		  (get-output-string op)))))))
+  
+  (lambda (suite-directory module-name)
   (let ([program
          (let ([desugared-path 
                 (build-path suite-directory (format "~a-desugared.sch" module-name))])
@@ -59,4 +61,4 @@
                           "simulator"
                           module-name
                           time
-                          stdout)))))
+                          stdout))))))

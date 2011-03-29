@@ -8,6 +8,23 @@
 
 (define-runtime-path runtime.js "../../externals/js-sicp-5-5/runtime.js")
 
+
+
+(provide make-run)
+
+(define (read* inp)
+  (parameterize ([read-accept-reader #t])
+    (let loop ()
+      (let ([next (read inp)])
+        (cond
+          [(eof-object? next)
+           '()]
+          [else
+           (cons next (loop))])))))
+
+
+;; run: suite-path module-name -> measurement 
+(define (make-run)
 (define evaluate (make-evaluate 
                   (lambda (program op)
 
@@ -31,24 +48,7 @@ return (function(succ, fail, params) {
 });
 EOF
                              ))))
-
-
-
-(provide run)
-
-(define (read* inp)
-  (parameterize ([read-accept-reader #t])
-    (let loop ()
-      (let ([next (read inp)])
-        (cond
-          [(eof-object? next)
-           '()]
-          [else
-           (cons next (loop))])))))
-
-
-;; run: suite-path module-name -> measurement 
-(define (run suite-directory module-name)
+  (lambda (suite-directory module-name)
   (let ([program
          (let ([desugared-path 
                 (build-path suite-directory (format "~a-desugared.sch" module-name))])
@@ -64,4 +64,4 @@ EOF
                           (format "browser:~a" (evaluated-browser result))
                           module-name
                           (evaluated-t result)
-                          (evaluated-stdout result))))))
+                          (evaluated-stdout result)))))))

@@ -16,6 +16,8 @@
 
 
 (require "save-measurement.rkt"
+	 "measurement-struct.rkt"
+	 racket/promise
 	 racket/runtime-path
 	 racket/list)
 
@@ -29,10 +31,10 @@
 
 
 (define-struct platform (name runner))
-(define all-platforms (list (make-platform "racket" racket:run)
-                            #;(make-platform "simulator" simulator:run)
-                            (make-platform "js-vm" js-vm:run)
-                            (make-platform "browser" browser:run)))
+(define all-platforms (list (make-platform "racket" (delay (racket:make-run)))
+                            #;(make-platform "simulator" (delay (simulator:make-run)))
+                            (make-platform "js-vm" (delay (js-vm:make-run)))
+                            (make-platform "browser" (delay (browser:make-run)))))
 
 (define (find-platform name)
   (let loop ([platforms all-platforms])
@@ -85,7 +87,11 @@
   (printf "Running ~a benchmark...\n" (program-name program))
   (parameterize ([current-directory this-path])
     (for ([platform platforms])
-      (printf "    ~a...\n" (platform-name platform))
+      (printf "    ~a... " (platform-name platform))
+      (flush-output)
       (with-handlers ([void (lambda (err)
 					 (printf "        Error occurred: ~s.\n" err))])
-	 (save-measurement! ((platform-runner platform) (program-dir program) (program-name program)))))))
+	 (let ([measurement ((force (platform-runner platform))
+			     (program-dir program) (program-name program))]) 
+	   (printf "~a seconds\n" (measurement-time measurement))
+	   (save-measurement! measurement))))))
