@@ -93,5 +93,5 @@
 					 (printf "        Error occurred: ~s.\n" err))])
 	 (let ([measurement ((force (platform-runner platform))
 			     (program-dir program) (program-name program))]) 
-	   (printf "~a seconds\n" (measurement-time measurement))
+	   (printf "~a milliseconds\n" (measurement-time measurement))
 	   (save-measurement! measurement))))))
