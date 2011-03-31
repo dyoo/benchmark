@@ -13,10 +13,9 @@
 (define-runtime-path self-path "runner.rkt")
 
 (define-runtime-path wescheme-language-module 
-  "private/lang/wescheme.rkt")
+  "private/lang/base.rkt"
+  #;"private/lang/wescheme.rkt")
 
-(define-runtime-path wescheme-interaction-language-module 
-  "private/lang/wescheme-interaction.rkt")
 
 
 (define extra-head-code #<<EOF
@@ -72,8 +71,8 @@ EOF
   
   
   (let ([collection-roots
-       (list wescheme-language-module
-             wescheme-interaction-language-module)])
+       (list wescheme-language-module)])
+
   (call-with-output-file (build-path tmp-htdocs "modules.js")
     (lambda (op)
       (fprintf op "var MODULES = {};\n")
