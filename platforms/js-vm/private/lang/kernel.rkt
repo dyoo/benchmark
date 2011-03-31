@@ -154,6 +154,12 @@
   (letrec ([y y])
     (eq? x y)))
 
+(define (racket:set-car! x v)
+  (error 'set-car!))
+
+(define (racket:set-cdr! x v)
+  (error 'set-cdr!))
+
 
 (provide-stub-function #;xml->s-exp
                        #;js-object?
@@ -457,4 +463,7 @@
 
 		       make-reader-graph
 		       make-placeholder
-		       placeholder-set!)
+		       placeholder-set!
+
+		       set-car!
+		       set-cdr!)

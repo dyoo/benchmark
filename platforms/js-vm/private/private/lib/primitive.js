@@ -2175,6 +2175,27 @@ PRIMITIVES['cons'] =
 		 });
 
 
+PRIMITIVES['set-car!'] =
+    new PrimProc('set-car!',
+		 2,
+		 false, false,
+		 function(lst, v) {
+		     check(lst, isPair, 'car', 'pair', 1);
+		     lst.first = v;
+		     return types.VOID;
+		 });
+
+PRIMITIVES['set-cdr!'] =
+    new PrimProc('set-cdr!',
+		 2,
+		 false, false,
+		 function (lst, v) {
+		     check(lst, isPair, 'cdr', 'pair', 1);
+		     lst.rest = v;
+		     return types.VOID;
+		 });
+
+
 PRIMITIVES['car'] =
     new PrimProc('car',
 		 1,
