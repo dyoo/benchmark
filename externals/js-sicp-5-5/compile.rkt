@@ -3,6 +3,7 @@
 (require "expression-structs.rkt"
          "lexical-structs.rkt"
          "il-structs.rkt"
+         "kernel-primitives.rkt"
          racket/bool
          racket/list)
 
@@ -13,22 +14,9 @@
 
 
 
-;; We try to keep at compile time a mapping from environment positions to
-;; statically known things, to generate better code.
-(define-struct: StaticallyKnownLam ([name : (U Symbol False)]
-                                    [entry-point : Symbol]
-                                    [arity : Natural]) #:transparent)
-
-(define-type CompileTimeEnvironmentEntry 
-  (U '? Prefix StaticallyKnownLam ModuleVariable))
-
-(define-type CompileTimeEnvironment (Listof CompileTimeEnvironmentEntry))
 
 
-
-
-
-(: -compile (ExpressionCore Target Linkage -> (Listof Statement)))
+(: -compile (Expression Target Linkage -> (Listof Statement)))
 ;; Generates the instruction-sequence stream.
 ;; Note: the toplevel generates the lambda body streams at the head, and then the
 ;; rest of the instruction stream.
@@ -48,11 +36,11 @@
                           [cenv : CompileTimeEnvironment]))
 
 
-(: collect-all-lams (ExpressionCore -> (Listof lam+cenv)))
+(: collect-all-lams (Expression -> (Listof lam+cenv)))
 ;; Finds all the lambdas in the expression.
 (define (collect-all-lams exp)
   (let: loop : (Listof lam+cenv)
-        ([exp : ExpressionCore exp]
+        ([exp : Expression exp]
          [cenv : CompileTimeEnvironment '()])
         
         (cond
@@ -75,13 +63,13 @@
                  (loop (Lam-body exp) 
                        (extract-lambda-cenv exp cenv)))]
           [(Seq? exp)
-           (apply append (map (lambda: ([e : ExpressionCore]) (loop e cenv))
+           (apply append (map (lambda: ([e : Expression]) (loop e cenv))
                               (Seq-actions exp)))]
           [(App? exp)
            (let ([new-cenv (append (build-list (length (App-operands exp)) (lambda: ([i : Natural]) '?))
                                    cenv)])
              (append (loop (App-operator exp) new-cenv)
-                     (apply append (map (lambda: ([e : ExpressionCore]) (loop e new-cenv)) (App-operands exp)))))]
+                     (apply append (map (lambda: ([e : Expression]) (loop e new-cenv)) (App-operands exp)))))]
           [(Let1? exp)
            (append (loop (Let1-rhs exp)
                          (cons '? cenv))
@@ -124,7 +112,7 @@
 
 
 
-(: compile (ExpressionCore CompileTimeEnvironment Target Linkage -> InstructionSequence))
+(: compile (Expression CompileTimeEnvironment Target Linkage -> InstructionSequence))
 ;; Compiles an expression into an instruction sequence.
 (define (compile exp cenv target linkage)
   (cond
@@ -276,23 +264,23 @@
   (let: ([t-branch : LabelLinkage (make-LabelLinkage (make-label 'trueBranch))]
          [f-branch : LabelLinkage (make-LabelLinkage (make-label 'falseBranch))]
          [after-if : LabelLinkage (make-LabelLinkage (make-label 'afterIf))])
-    (let ([consequent-linkage
-           (if (eq? linkage next-linkage)
-               after-if
-               linkage)])
-      (let ([p-code (compile (Branch-predicate exp) cenv 'val next-linkage)]
-            [c-code (compile (Branch-consequent exp) cenv target consequent-linkage)]
-            [a-code (compile (Branch-alternative exp) cenv target linkage)])
-        (append-instruction-sequences p-code
-                                      (append-instruction-sequences
-                                       (make-instruction-sequence
-                                        `(,(make-TestAndBranchStatement 'false? 
-                                                                        'val
-                                                                        (LabelLinkage-label f-branch))))
-                                       (append-instruction-sequences
-                                        (append-instruction-sequences (LabelLinkage-label t-branch) c-code)
-                                        (append-instruction-sequences (LabelLinkage-label f-branch) a-code))
-                                       (LabelLinkage-label after-if)))))))
+        (let ([consequent-linkage
+               (if (eq? linkage next-linkage)
+                   after-if
+                   linkage)])
+          (let ([p-code (compile (Branch-predicate exp) cenv 'val next-linkage)]
+                [c-code (compile (Branch-consequent exp) cenv target consequent-linkage)]
+                [a-code (compile (Branch-alternative exp) cenv target linkage)])
+            (append-instruction-sequences p-code
+                                          (append-instruction-sequences
+                                           (make-instruction-sequence
+                                            `(,(make-TestAndBranchStatement 'false? 
+                                                                            'val
+                                                                            (LabelLinkage-label f-branch))))
+                                           (append-instruction-sequences
+                                            (append-instruction-sequences (LabelLinkage-label t-branch) c-code)
+                                            (append-instruction-sequences (LabelLinkage-label f-branch) a-code))
+                                           (LabelLinkage-label after-if)))))))
 
 
 (: compile-sequence ((Listof Expression) CompileTimeEnvironment Target Linkage -> InstructionSequence))
@@ -370,6 +358,11 @@
                                                         (lam+cenv-cenv (first exps)))
                                    (compile-lambda-bodies (rest exps)))]))
 
+(: extend-compile-time-environment/scratch-space (CompileTimeEnvironment Natural -> CompileTimeEnvironment))
+(define (extend-compile-time-environment/scratch-space cenv n)
+  (append (build-list n (lambda: ([i : Natural])
+                                 '?))
+          cenv))
 
 (: compile-application (App CompileTimeEnvironment Target Linkage -> InstructionSequence))
 ;; Compiles procedure application
@@ -379,12 +372,13 @@
 ;;     Known kernel primitive
 ;;  In the general case, we do general procedure application.
 (define (compile-application exp cenv target linkage) 
-  (let ([extended-cenv (append (map (lambda: ([op : ExpressionCore])
-                                             '?)
-                                    (App-operands exp))
-                               cenv)])
+  (let ([extended-cenv 
+         (extend-compile-time-environment/scratch-space 
+          cenv 
+          (length (App-operands exp)))])
+    
     (define (default)
-      (compile-general-application exp cenv extended-cenv target linkage))
+      (compile-general-application exp cenv target linkage))
     
     (let: ([op-knowledge : CompileTimeEnvironmentEntry
                          (extract-static-knowledge (App-operator exp)
@@ -397,40 +391,44 @@
                [(symbol=? (ModuleVariable-module-path op-knowledge) '#%kernel)
                 (let ([op (ModuleVariable-name op-knowledge)])
                   (cond [(KernelPrimitiveName? op)
-                         #;(printf "Open coded: ~s\n" (ModuleVariable-name op-knowledge))
                          (compile-kernel-primitive-application 
                           op
-                          exp cenv extended-cenv target linkage)]
+                          exp cenv target linkage)]
                         [else
                          (default)]))]
                [else
-                #;(printf "Candidate for open coding: ~s\n" (ModuleVariable-name op-knowledge))
                 (default)])]
             [(StaticallyKnownLam? op-knowledge)
-             (compile-statically-known-lam-application op-knowledge exp cenv extended-cenv target linkage)]
+             (compile-statically-known-lam-application op-knowledge exp cenv target linkage)]
             [(Prefix? op-knowledge)
-             (error 'impossible)]))))
+             (error 'impossible)]
+            [(Const? op-knowledge)
+             (error 'application "Can't apply constant ~s as a function" (Const-const op-knowledge))]))))
 
 
-(: compile-general-application (App CompileTimeEnvironment CompileTimeEnvironment Target Linkage -> InstructionSequence))
-(define (compile-general-application exp cenv extended-cenv target linkage)
-  (let ([proc-code (compile (App-operator exp)
-                            extended-cenv 
-                            (if (empty? (App-operands exp))
-                                'proc
-                                (make-EnvLexicalReference 
-                                 (ensure-natural (sub1 (length (App-operands exp))))
-                                 #f))
-                            next-linkage)]
-        [operand-codes (map (lambda: ([operand : Expression]
-                                      [target : Target])
-                                     (compile operand extended-cenv target next-linkage))
-                            (App-operands exp)
-                            (build-list (length (App-operands exp))
-                                        (lambda: ([i : Natural])
-                                                 (if (< i (sub1 (length (App-operands exp))))
-                                                     (make-EnvLexicalReference i #f)
-                                                     'val))))])    
+(: compile-general-application (App CompileTimeEnvironment Target Linkage -> InstructionSequence))
+(define (compile-general-application exp cenv target linkage)
+  (let* ([extended-cenv
+          (extend-compile-time-environment/scratch-space 
+           cenv 
+           (length (App-operands exp)))]
+         [proc-code (compile (App-operator exp)
+                             extended-cenv 
+                             (if (empty? (App-operands exp))
+                                 'proc
+                                 (make-EnvLexicalReference 
+                                  (ensure-natural (sub1 (length (App-operands exp))))
+                                  #f))
+                             next-linkage)]
+         [operand-codes (map (lambda: ([operand : Expression]
+                                       [target : Target])
+                                      (compile operand extended-cenv target next-linkage))
+                             (App-operands exp)
+                             (build-list (length (App-operands exp))
+                                         (lambda: ([i : Natural])
+                                                  (if (< i (sub1 (length (App-operands exp))))
+                                                      (make-EnvLexicalReference i #f)
+                                                      'val))))])    
     (append-instruction-sequences
      (if (not (empty? (App-operands exp)))
          (make-instruction-sequence `(,(make-PushEnvironment (length (App-operands exp)) #f)))
@@ -445,89 +443,235 @@
 
 
 (: compile-kernel-primitive-application
-   (KernelPrimitiveName App CompileTimeEnvironment CompileTimeEnvironment Target Linkage -> InstructionSequence))
-;; Special case of application, where the operator is statically known to be in the set
-;; of hardcoded primitives.
-(define (compile-kernel-primitive-application kernel-op exp cenv extended-cenv target linkage)
-  (let* ([n (length (App-operands exp))]
-         [operand-poss
-          (build-list (length (App-operands exp))
-                      (lambda: ([i : Natural])
-                               (make-EnvLexicalReference i #f)))]
-         [operand-codes (map (lambda: ([operand : Expression]
-                                       [target : Target])
-                                      (compile operand extended-cenv target next-linkage))
-                             (App-operands exp)
-                             operand-poss)])
-    (cond 
-      ;; Special case optimization: we can avoid pushing the stack altogether
-      [(all-operands-are-constant-or-stack-references (App-operands exp))
-       => (lambda (opargs)
-            (end-with-linkage
-             linkage cenv
-             (make-instruction-sequence
-              `(,(make-AssignPrimOpStatement
-                  target
-                  (make-CallKernelPrimitiveProcedure kernel-op (map (lambda: ([arg : OpArg])
-                                                                             (adjust-oparg-depth arg (- n)))
-                                                                    opargs)))))))]
-      [else
-       (end-with-linkage 
+   (KernelPrimitiveName App CompileTimeEnvironment Target Linkage -> InstructionSequence))
+;; This is a special case of application, where the operator is statically
+;; known to be in the set of hardcoded primitives.
+;;
+;; There's a special case optimization we can perform: we can avoid touching
+;; the stack for constant arguments; rather than allocate (length (App-operands exp))
+;; stack slots, we can do less than that.
+;;
+;; We have to be sensitive to mutation.
+(define (compile-kernel-primitive-application kernel-op exp cenv target linkage)
+  (cond
+    ;; If all the arguments are primitive enough (all constants, localrefs, or toplevelrefs),
+    ;; then application requires no stack space at all, and application is especially simple.
+    [(andmap (lambda (op) 
+               ;; TODO: as long as the operand contains no applications?
+               (or (Constant? op)
+                   (ToplevelRef? op)
+                   (LocalRef? op)))
+             (App-operands exp))
+     (let* ([n (length (App-operands exp))]
+            
+            [operand-knowledge
+             (map (lambda: ([arg : Expression])
+                           (extract-static-knowledge 
+                            arg 
+                            (extend-compile-time-environment/scratch-space 
+                             cenv n)))
+                  (App-operands exp))]
+            
+            [typechecks?
+             (map (lambda: ([dom : OperandDomain]
+                            [known : CompileTimeEnvironmentEntry])
+                           (not (redundant-check? dom known)))
+                  (kernel-primitive-expected-operand-types kernel-op n)
+                  operand-knowledge)]
+            
+            [expected-operand-types
+             (kernel-primitive-expected-operand-types kernel-op n)]
+            [operand-poss
+             (simple-operands->opargs (map (lambda: ([op : Expression])
+                                                    (adjust-expression-depth op n n))
+                                           (App-operands exp)))])
+       (end-with-linkage
+        linkage cenv
+        (make-instruction-sequence
+         `(,(make-AssignPrimOpStatement
+             target
+             (make-CallKernelPrimitiveProcedure 
+              kernel-op 
+              operand-poss
+              expected-operand-types
+              typechecks?))))))]
+    
+    [else
+     ;; Otherwise, we can split the operands into two categories: constants, and the rest.
+     (let*-values ([(n) 
+                    (length (App-operands exp))]
+                   
+                   [(expected-operand-types)
+                    (kernel-primitive-expected-operand-types kernel-op n)]
+                   
+                   [(constant-operands rest-operands)
+                    (split-operands-by-constant-or-stack-references 
+                     (App-operands exp))]
+                   
+                   ;; here, we rewrite the stack references so they assume no scratch space
+                   ;; used by the constant operands.
+                   [(extended-cenv constant-operands rest-operands)
+                    (values (extend-compile-time-environment/scratch-space 
+                             cenv 
+                             (length rest-operands))
+                            
+                            (map (lambda: ([constant-operand : Expression])
+                                          (ensure-simple-expression
+                                           (adjust-expression-depth constant-operand
+                                                                    (length constant-operands)
+                                                                    n)))
+                                 constant-operands)
+                            
+                            (map (lambda: ([rest-operand : Expression])
+                                          (adjust-expression-depth rest-operand
+                                                                   (length constant-operands)
+                                                                   n))
+                                 rest-operands))]
+                   
+                   [(operand-knowledge)
+                    (append (map (lambda: ([arg : Expression])
+                                          (extract-static-knowledge arg extended-cenv))
+                                 constant-operands)
+                            (map (lambda: ([arg : Expression])
+                                          (extract-static-knowledge arg extended-cenv))
+                                 rest-operands))]
+                   
+                   [(typechecks?)
+                    (map (lambda: ([dom : OperandDomain]
+                                   [known : CompileTimeEnvironmentEntry])
+                                  (not (redundant-check? dom known)))
+                         (kernel-primitive-expected-operand-types kernel-op n)
+                         operand-knowledge)]
+                   
+                   [(stack-pushing-code) 
+                    (if (empty? rest-operands)
+                        empty-instruction-sequence
+                        (make-instruction-sequence `(,(make-PushEnvironment 
+                                                       (length rest-operands)
+                                                       #f))))]
+                   [(stack-popping-code) 
+                    (if (empty? rest-operands)
+                        empty-instruction-sequence
+                        (make-instruction-sequence `(,(make-PopEnvironment 
+                                                       (length rest-operands)
+                                                       0))))]
+                   
+                   [(constant-operand-poss)
+                    (simple-operands->opargs constant-operands)]
+                   
+                   [(rest-operand-poss)
+                    (build-list (length rest-operands)
+                                (lambda: ([i : Natural])
+                                         (make-EnvLexicalReference i #f)))]
+                   [(rest-operand-code)
+                    (apply append-instruction-sequences
+                           (map (lambda: ([operand : Expression]
+                                          [target : Target])
+                                         (compile operand extended-cenv target next-linkage))
+                                rest-operands
+                                rest-operand-poss))])
+       
+       (end-with-linkage
         linkage cenv
         (append-instruction-sequences
-         
-         (if (not (empty? (App-operands exp)))
-             (make-instruction-sequence `(,(make-PushEnvironment (length (App-operands exp)) #f)))
-             empty-instruction-sequence)
-         
-         (apply append-instruction-sequences operand-codes)
-         
-         (make-instruction-sequence 
-          `(,(make-AssignPrimOpStatement 
-              ;; Optimization: we put the result directly in the registers, or in
-              ;; the appropriate spot on the stack.  This takes into account the popenviroment
-              ;; that happens right afterwards.
-              (adjust-target-depth target n)                     
-              (make-CallKernelPrimitiveProcedure kernel-op operand-poss))))
-         
-         (if (> n 0)
-             (make-instruction-sequence `(,(make-PopEnvironment n 0)))
-             empty-instruction-sequence)))])))
+         stack-pushing-code
+         rest-operand-code
+         (make-instruction-sequence
+          `(,(make-AssignPrimOpStatement
+              (adjust-target-depth target (length rest-operands))
+              (make-CallKernelPrimitiveProcedure 
+               kernel-op 
+               (append constant-operand-poss rest-operand-poss)
+               expected-operand-types
+               typechecks?))))
+         stack-popping-code)))]))
 
 
 
-(: all-operands-are-constant-or-stack-references ((Listof ExpressionCore) -> (U False (Listof OpArg))))
-;; Produces a list of OpArgs if all the operands are particularly simple, and false otherwise.
-(define (all-operands-are-constant-or-stack-references rands)
-  (cond [(andmap (lambda: ([rand : ExpressionCore])
-                          (or (Constant? rand)
-                              (LocalRef? rand)
-                              (ToplevelRef? rand)))
-                 rands)
-         (map (lambda: ([e : ExpressionCore])
-                       (cond
-                         [(Constant? e)
-                          (make-Const (Constant-v e))]
-                         [(LocalRef? e)
-                          (make-EnvLexicalReference (LocalRef-depth e)
-                                                    (LocalRef-unbox? e))]
-                         [(ToplevelRef? e)
-                          (make-EnvPrefixReference (ToplevelRef-depth e)
-                                                   (ToplevelRef-pos e))]
-                         [else 
-                          (error 'all-operands-are-constant "Impossible")]))
-              rands)]
-        [else #f]))
 
+(: ensure-simple-expression (Expression -> (U Constant ToplevelRef LocalRef)))
+(define (ensure-simple-expression e)
+  (if (or (Constant? e)
+          (LocalRef? e)
+          (ToplevelRef? e))
+      e
+      (error 'ensure-simple-expression)))
+
+
+(: simple-operands->opargs ((Listof Expression) -> (Listof OpArg)))
+;; Produces a list of OpArgs if all the operands are particularly simple, and false therwise.
+(define (simple-operands->opargs rands)
+  (map (lambda: ([e : Expression])
+                (cond
+                  [(Constant? e)
+                   (make-Const (Constant-v e))]
+                  [(LocalRef? e)
+                   (make-EnvLexicalReference (LocalRef-depth e)
+                                             (LocalRef-unbox? e))]
+                  [(ToplevelRef? e)
+                   (make-EnvPrefixReference (ToplevelRef-depth e)
+                                            (ToplevelRef-pos e))]
+                  [else 
+                   (error 'all-operands-are-constant "Impossible")]))
+       rands))
+
+
+
+(: redundant-check? (OperandDomain CompileTimeEnvironmentEntry -> Boolean))
+;; Produces true if we know the knowledge implies the domain-type.
+(define (redundant-check? domain-type knowledge)
+  (cond
+    [(eq? domain-type 'any)
+     #t]
+    [else
+     (cond [(Const? knowledge)
+            (case domain-type
+              [(number)
+               (number? (Const-const knowledge))]
+              [(string)
+               (string? (Const-const knowledge))]
+              [(box)
+               (box? (Const-const knowledge))]
+              [(list)
+               (list? (Const-const knowledge))]
+              [(pair)
+               (pair? (Const-const knowledge))])]
+           [else
+            #f])]))
+
+
+(: split-operands-by-constant-or-stack-references 
+   ((Listof Expression)  -> 
+                         (values (Listof (U Constant LocalRef ToplevelRef))
+                                 (Listof Expression))))
+;; Splits off the list of operations into two: a prefix of constant
+;; or simple expressions, and the remainder.
+(define (split-operands-by-constant-or-stack-references rands)
+  (let: loop : (values (Listof (U Constant LocalRef ToplevelRef)) (Listof Expression))
+        ([rands : (Listof Expression) rands]
+         [constants : (Listof (U Constant LocalRef ToplevelRef))
+                    empty])
+        (cond [(empty? rands)
+               (values (reverse constants) empty)]
+              [else (let ([e (first rands)])
+                      (if (or (Constant? e)
+                              (and (LocalRef? e) (not (LocalRef-unbox? e))) 
+                              #;(and (ToplevelRef? e)
+                                     (let ([prefix (ensure-prefix 
+                                                    (list-ref cenv (ToplevelRef-depth e)))])
+                                       (ModuleVariable? 
+                                        (list-ref prefix (ToplevelRef-pos e))))))
+                          (loop (rest rands) (cons e constants))
+                          (values (reverse constants) rands)))])))
 
 
 
 
 
 (: compile-statically-known-lam-application 
-   (StaticallyKnownLam App CompileTimeEnvironment CompileTimeEnvironment Target Linkage 
+   (StaticallyKnownLam App CompileTimeEnvironment Target Linkage 
                        -> InstructionSequence))
-(define (compile-statically-known-lam-application static-knowledge exp cenv extended-cenv target linkage)
+(define (compile-statically-known-lam-application static-knowledge exp cenv target linkage)
   (unless (= (length (App-operands exp)) 
              (StaticallyKnownLam-arity static-knowledge))
     (error 'arity-mismatch "~s expected ~s arguments, but received ~s" 
@@ -535,23 +679,27 @@
            (StaticallyKnownLam-arity static-knowledge)
            (length (App-operands exp))))
   
-  (let ([proc-code (compile (App-operator exp)
-                            extended-cenv 
-                            (if (empty? (App-operands exp))
-                                'proc
-                                (make-EnvLexicalReference 
-                                 (ensure-natural (sub1 (length (App-operands exp))))
-                                 #f))
-                            next-linkage)]
-        [operand-codes (map (lambda: ([operand : Expression]
-                                      [target : Target])
-                                     (compile operand extended-cenv target next-linkage))
-                            (App-operands exp)
-                            (build-list (length (App-operands exp))
-                                        (lambda: ([i : Natural])
-                                                 (if (< i (sub1 (length (App-operands exp))))
-                                                     (make-EnvLexicalReference i #f)
-                                                     'val))))])    
+  (let* ([extended-cenv 
+          (extend-compile-time-environment/scratch-space 
+           cenv 
+           (length (App-operands exp)))]
+         [proc-code (compile (App-operator exp)
+                             extended-cenv 
+                             (if (empty? (App-operands exp))
+                                 'proc
+                                 (make-EnvLexicalReference 
+                                  (ensure-natural (sub1 (length (App-operands exp))))
+                                  #f))
+                             next-linkage)]
+         [operand-codes (map (lambda: ([operand : Expression]
+                                       [target : Target])
+                                      (compile operand extended-cenv target next-linkage))
+                             (App-operands exp)
+                             (build-list (length (App-operands exp))
+                                         (lambda: ([i : Natural])
+                                                  (if (< i (sub1 (length (App-operands exp))))
+                                                      (make-EnvLexicalReference i #f)
+                                                      'val))))])    
     (append-instruction-sequences
      (if (not (empty? (App-operands exp)))
          (make-instruction-sequence `(,(make-PushEnvironment (length (App-operands exp)) #f)))
@@ -605,38 +753,38 @@
   (let: ([primitive-branch : LabelLinkage (make-LabelLinkage (make-label 'primitiveBranch))]
          [compiled-branch : LabelLinkage (make-LabelLinkage (make-label 'compiledBranch))]
          [after-call : LabelLinkage (make-LabelLinkage (make-label 'afterCall))])
-    (let: ([compiled-linkage : Linkage (if (eq? linkage next-linkage) after-call linkage)])
-      (append-instruction-sequences
-       (make-instruction-sequence 
-        `(,(make-TestAndBranchStatement 'primitive-procedure?
-                                        'proc
-                                        (LabelLinkage-label primitive-branch))))
-       
-       (LabelLinkage-label compiled-branch)
-       (make-instruction-sequence
-        `(,(make-PerformStatement (make-CheckClosureArity! n))))
-       (end-with-compiled-application-linkage 
-        compiled-linkage
-        extended-cenv
-        (compile-proc-appl extended-cenv (make-Reg 'val) n target compiled-linkage))
-       
-       (LabelLinkage-label primitive-branch)
-       (end-with-linkage
-        linkage
-        cenv
-        (append-instruction-sequences
-         (make-instruction-sequence 
-          `(,(make-AssignPrimOpStatement 
-              ;; Optimization: we put the result directly in the registers, or in
-              ;; the appropriate spot on the stack.  This takes into account the popenviroment
-              ;; that happens right afterwards.
-              (adjust-target-depth target n)                     
-              (make-ApplyPrimitiveProcedure n))))
-         (if (not (= n 0))
-             (make-instruction-sequence
-              `(,(make-PopEnvironment n 0)))
-             empty-instruction-sequence)))
-       (LabelLinkage-label after-call)))))
+        (let: ([compiled-linkage : Linkage (if (eq? linkage next-linkage) after-call linkage)])
+              (append-instruction-sequences
+               (make-instruction-sequence 
+                `(,(make-TestAndBranchStatement 'primitive-procedure?
+                                                'proc
+                                                (LabelLinkage-label primitive-branch))))
+               
+               (LabelLinkage-label compiled-branch)
+               (make-instruction-sequence
+                `(,(make-PerformStatement (make-CheckClosureArity! n))))
+               (end-with-compiled-application-linkage 
+                compiled-linkage
+                extended-cenv
+                (compile-proc-appl extended-cenv (make-Reg 'val) n target compiled-linkage))
+               
+               (LabelLinkage-label primitive-branch)
+               (end-with-linkage
+                linkage
+                cenv
+                (append-instruction-sequences
+                 (make-instruction-sequence 
+                  `(,(make-AssignPrimOpStatement 
+                      ;; Optimization: we put the result directly in the registers, or in
+                      ;; the appropriate spot on the stack.  This takes into account the popenviroment
+                      ;; that happens right afterwards.
+                      (adjust-target-depth target n)                     
+                      (make-ApplyPrimitiveProcedure n))))
+                 (if (not (= n 0))
+                     (make-instruction-sequence
+                      `(,(make-PopEnvironment n 0)))
+                     empty-instruction-sequence)))
+               (LabelLinkage-label after-call)))))
 
 
 (: compile-procedure-call/statically-known-lam 
@@ -644,16 +792,16 @@
 (define (compile-procedure-call/statically-known-lam static-knowledge extended-cenv n target linkage)
   (let*: ([after-call : LabelLinkage (make-LabelLinkage (make-label 'afterCall))]
           [compiled-linkage : Linkage (if (eq? linkage next-linkage) after-call linkage)])
-    (append-instruction-sequences
-     (end-with-compiled-application-linkage 
-      compiled-linkage
-      extended-cenv
-      (compile-proc-appl extended-cenv 
-                         (make-Label (StaticallyKnownLam-entry-point static-knowledge))
-                         n 
-                         target
-                         compiled-linkage))
-     (LabelLinkage-label after-call))))
+         (append-instruction-sequences
+          (end-with-compiled-application-linkage 
+           compiled-linkage
+           extended-cenv
+           (compile-proc-appl extended-cenv 
+                              (make-Label (StaticallyKnownLam-entry-point static-knowledge))
+                              n 
+                              target
+                              compiled-linkage))
+          (LabelLinkage-label after-call))))
 
 
 
@@ -686,7 +834,7 @@
             ;; only when the target is the val register.
             (error 'compile "return linkage, target not val: ~s" target)])]
         
-
+        
         [(NextLinkage? linkage)
          (cond [(eq? target 'val)
                 ;; This case happens for a function call that isn't in
@@ -717,7 +865,7 @@
                  `(,(make-PushControlFrame (LabelLinkage-label linkage))
                    ,(make-AssignPrimOpStatement 'val (make-GetCompiledProcedureEntry))
                    ,(make-GotoStatement entry-point)))]
-
+               
                [else
                 ;; This case happens for evaluating arguments, since the
                 ;; arguments are being installed into the scratch space.
@@ -735,8 +883,8 @@
 
 
 
-(: extract-static-knowledge (ExpressionCore CompileTimeEnvironment ->  
-                                            CompileTimeEnvironmentEntry))
+(: extract-static-knowledge (Expression CompileTimeEnvironment ->  
+                                        CompileTimeEnvironmentEntry))
 ;; Statically determines what we know about exp, given the compile time environment.
 (define (extract-static-knowledge exp cenv)
   (cond
@@ -747,11 +895,8 @@
     [(and (LocalRef? exp) 
           (not (LocalRef-unbox? exp)))
      (let ([entry (list-ref cenv (LocalRef-depth exp))])
-       (cond
-         [(StaticallyKnownLam? entry)
-          entry]
-         [else
-          '?]))]
+       entry)]
+    
     [(ToplevelRef? exp)
      (let: ([name : (U Symbol False ModuleVariable)
                   (list-ref (Prefix-names (ensure-prefix (list-ref cenv (ToplevelRef-depth exp))))
@@ -761,6 +906,10 @@
               name]
              [else
               '?]))]
+    
+    [(Constant? exp)
+     (make-Const (Constant-v exp))]
+    
     [else
      '?]))
 
@@ -943,6 +1092,12 @@
       x
       (error 'ensure-prefix "Not a prefix: ~s" x)))
 
+(: ensure-lam (Any -> Lam))
+(define (ensure-lam x)
+  (if (Lam? x)
+      x
+      (error 'ensure-lam "Not a Lam: ~s" x)))
+
 
 
 (: adjust-target-depth (Target Natural -> Target))
@@ -967,10 +1122,13 @@
   (cond
     [(Const? arg)
      arg]
+    
     [(Reg? arg)
      arg]
+    
     [(Label? arg)
      arg]
+    
     [(EnvLexicalReference? arg)
      (make-EnvLexicalReference (ensure-natural (+ n (EnvLexicalReference-depth arg)))
                                (EnvLexicalReference-unbox? arg))]
@@ -979,3 +1137,117 @@
                               (EnvPrefixReference-pos arg))]
     [(EnvWholePrefixReference? arg)
      (make-EnvWholePrefixReference (ensure-natural (+ n (EnvWholePrefixReference-depth arg))))]))
+
+
+
+
+(: adjust-expression-depth (Expression Natural Natural -> Expression))
+;; Redirects references to the stack to route around a region of size n.
+;; The region begins at offset skip into the environment.
+(define (adjust-expression-depth exp n skip)
+  (cond
+    [(Top? exp)
+     (make-Top (Top-prefix exp)
+               (adjust-expression-depth (Top-code exp) n (add1 skip)))]
+    
+    [(Constant? exp)
+     exp]
+    
+    [(ToplevelRef? exp)
+     (if (< (ToplevelRef-depth exp) skip)
+         exp
+         (make-ToplevelRef (ensure-natural (- (ToplevelRef-depth exp) n))
+                           (ToplevelRef-pos exp)))]
+    
+    [(LocalRef? exp)
+     (if (< (LocalRef-depth exp) skip)
+         exp
+         (make-LocalRef (ensure-natural (- (LocalRef-depth exp) n))
+                        (LocalRef-unbox? exp)))]
+    
+    [(ToplevelSet? exp)
+     (if (< (ToplevelSet-depth exp) skip)
+         (make-ToplevelSet (ToplevelSet-depth exp)
+                           (ToplevelSet-pos exp)
+                           (ToplevelSet-name exp)
+                           (adjust-expression-depth (ToplevelSet-value exp) n skip))
+         (make-ToplevelSet (ensure-natural (- (ToplevelSet-depth exp) n))
+                           (ToplevelSet-pos exp)
+                           (ToplevelSet-name exp)
+                           (adjust-expression-depth (ToplevelSet-value exp) n skip)))]
+    
+    [(Branch? exp)
+     (make-Branch (adjust-expression-depth (Branch-predicate exp) n skip)
+                  (adjust-expression-depth (Branch-consequent exp) n skip)
+                  (adjust-expression-depth (Branch-alternative exp) n skip))]
+    
+    [(Lam? exp)
+     (make-Lam (Lam-name exp)
+               (Lam-num-parameters exp)
+               (Lam-body exp)
+               (map (lambda: ([d : Natural]) 
+                             (if (< d skip)
+                                 d
+                                 (ensure-natural (- d n))))
+                    (Lam-closure-map exp))
+               (Lam-entry-label exp))]
+    
+    [(Seq? exp)
+     (make-Seq (map (lambda: ([action : Expression])
+                             (adjust-expression-depth action n skip))
+                    (Seq-actions exp)))]
+    
+    [(App? exp)
+     (make-App (adjust-expression-depth (App-operator exp) n 
+                                        (+ skip (length (App-operands exp))))
+               (map (lambda: ([operand : Expression])
+                             (adjust-expression-depth 
+                              operand n (+ skip (length (App-operands exp)))))
+                    (App-operands exp)))]
+    
+    [(Let1? exp)
+     (make-Let1 (adjust-expression-depth (Let1-rhs exp) n (add1 skip))
+                (adjust-expression-depth (Let1-body exp) n (add1 skip)))]
+    
+    [(LetVoid? exp)
+     (make-LetVoid (LetVoid-count exp)
+                   (adjust-expression-depth (LetVoid-body exp) 
+                                            n
+                                            (+ skip (LetVoid-count exp)))
+                   (LetVoid-boxes? exp))]
+    
+    [(LetRec? exp)
+     (make-LetRec (let: loop : (Listof Lam) ([procs : (Listof Lam) (LetRec-procs exp)])
+                        (cond
+                          [(empty? procs)
+                           '()]
+                          [else
+                           (cons (ensure-lam (adjust-expression-depth 
+                                              (first procs)
+                                              n 
+                                              (+ skip (length (LetRec-procs exp)))))
+                                 (loop (rest procs)))]))
+                  (adjust-expression-depth (LetRec-body exp) n 
+                                           (+ skip (length (LetRec-procs exp)))))]
+    
+    [(InstallValue? exp)
+     (if (< (InstallValue-depth exp) skip)
+         (make-InstallValue (InstallValue-depth exp)
+                            (adjust-expression-depth (InstallValue-body exp)
+                                                     n
+                                                     skip)
+                            (InstallValue-box? exp))
+         (make-InstallValue (ensure-natural (- (InstallValue-depth exp) n))
+                            (adjust-expression-depth (InstallValue-body exp)
+                                                     n
+                                                     skip)
+                            (InstallValue-box? exp)))]
+    
+    [(BoxEnv? exp)
+     (if (< (BoxEnv-depth exp) skip)
+         (make-BoxEnv (BoxEnv-depth exp)
+                      (adjust-expression-depth (BoxEnv-body exp) n skip))
+         (make-BoxEnv (ensure-natural (- (BoxEnv-depth exp) n))
+                      (adjust-expression-depth (BoxEnv-body exp) n skip)))]))
+
+

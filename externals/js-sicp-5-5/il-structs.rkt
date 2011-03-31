@@ -1,7 +1,8 @@
 #lang typed/racket/base
 (provide (all-defined-out))
 
-(require "lexical-structs.rkt")
+(require "lexical-structs.rkt"
+         "kernel-primitives.rkt")
 
 
 
@@ -157,31 +158,16 @@
 
 
 
-;; The following are primitives that the compiler knows about:
-(define-type KernelPrimitiveName (U '+
-                                    '-
-                                    '*
-                                    '/
-                                    'add1
-                                    'sub1
-                                    '<
-                                    '<=
-                                    '=
-                                    '>
-                                    '>=
-                                    'cons
-                                    'car
-                                    'cdr
-                                    'list
-                                    'null?
-                                    'not
-                                    'eq?
-                                    ))
-(define-predicate KernelPrimitiveName? KernelPrimitiveName)
+
+
 
 
 (define-struct: CallKernelPrimitiveProcedure ([operator : KernelPrimitiveName]
-                                              [operands : (Listof OpArg)])
+
+                                              [operands : (Listof OpArg)]
+                                              [expected-operand-types : (Listof OperandDomain)]
+                                              ;; For each operand, #t will add code to typecheck the operand
+                                              [typechecks? : (Listof Boolean)])
   #:transparent)
 
 
@@ -299,6 +285,35 @@
 (define-type Linkage (U NextLinkage
                         ReturnLinkage
                         LabelLinkage))
+
+
+
+
+
+
+
+
+
+
+
+
+;; Static knowledge about a value
+
+;; We try to keep at compile time a mapping from environment positions to
+;; statically known things, to generate better code.
+(define-struct: StaticallyKnownLam ([name : (U Symbol False)]
+                                    [entry-point : Symbol]
+                                    [arity : Natural]) #:transparent)
+
+(define-type CompileTimeEnvironmentEntry 
+  (U '?          ;; no knowledge
+     Prefix      ;; placeholder: necessary since the toplevel lives in the environment too
+     StaticallyKnownLam ;; The value is a known lam
+     ModuleVariable     ;; The value is a known module variable
+     Const
+     ))
+
+(define-type CompileTimeEnvironment (Listof CompileTimeEnvironmentEntry))
 
 
 
