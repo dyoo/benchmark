@@ -66,7 +66,10 @@
                                  PopEnvironment
                                  PushEnvironment
                                  PushControlFrame
-                                 PopControlFrame))
+                                 PushControlFrame/Prompt
+
+                                 PopControlFrame
+                                 PopControlFrame/Prompt))
 
 (define-type Statement (U UnlabeledStatement
                           Symbol  ;; label
@@ -91,12 +94,28 @@
 
 (define-struct: PopControlFrame () 
   #:transparent)
+(define-struct: PopControlFrame/Prompt () 
+  #:transparent)
 
 ;; Adding a frame for getting back after procedure application.
 ;; The 'proc register must hold either #f or a closure at the time of
 ;; this call, as the control frame will hold onto the called procedure record.
 (define-struct: PushControlFrame ([label : Symbol]) 
   #:transparent)
+
+(define-struct: PushControlFrame/Prompt ([tag : (U OpArg DefaultContinuationPromptTag)]
+                                         [label : Symbol]
+                                         ;; TODO: add handler and arguments
+                                         )
+  #:transparent)
+
+(define-struct: DefaultContinuationPromptTag ()
+  #:transparent)
+(define default-continuation-prompt-tag 
+  (make-DefaultContinuationPromptTag))
+
+
+
 
 (define-struct: GotoStatement ([target : (U Label Reg)]) 
   #:transparent)
@@ -184,7 +203,8 @@
 (define-struct: CaptureEnvironment ([skip : Natural]))
 
 ;; Capture the control stack, skipping skip frames.
-(define-struct: CaptureControl ([skip : Natural]))
+(define-struct: CaptureControl ([skip : Natural]
+                                [tag : (U DefaultContinuationPromptTag OpArg)]))
 
 
 
@@ -231,7 +251,7 @@
   #:transparent)
 
 ;; Changes over the control located at the given argument from the structure in env[1]
-(define-struct: RestoreControl! ())
+(define-struct: RestoreControl! ([tag : (U DefaultContinuationPromptTag OpArg)]))
 
 ;; Changes over the environment located at the given argument from the structure in env[0]
 (define-struct: RestoreEnvironment! ())
@@ -280,10 +300,14 @@
 (define-struct: ReturnLinkage ())
 (define return-linkage (make-ReturnLinkage))
 
+(define-struct: PromptLinkage ())
+(define prompt-linkage (make-PromptLinkage))
+
 (define-struct: LabelLinkage ([label : Symbol]))
 
 (define-type Linkage (U NextLinkage
                         ReturnLinkage
+                        PromptLinkage
                         LabelLinkage))
 
 
@@ -326,3 +350,6 @@
                             [stmts : (Listof UnlabeledStatement)]) 
   #:transparent)
 
+
+
+(define-predicate OpArg? OpArg)

@@ -38,7 +38,7 @@
 (define new-machine
   (case-lambda: 
     [([program-text : (Listof Statement)])
-     (new-machine program-text #t)]
+     (new-machine program-text #f)]
     [([program-text : (Listof Statement)]
       [with-bootstrapping-code? : Boolean])
      (let*: ([after-bootstrapping : Symbol (make-label 'afterBootstrapping)]
@@ -83,29 +83,34 @@
 (: step! (machine -> 'ok))
 ;; Take one simulation step.
 (define (step! m)
-  (let: ([i : Statement (current-instruction m)])
-        (cond
-          [(symbol? i)
-           'ok]
-          [(AssignImmediateStatement? i)
-           (step-assign-immediate! m i)]
-          [(AssignPrimOpStatement? i)
-           (step-assign-primitive-operation! m i)]
-          [(PerformStatement? i)
-           (step-perform! m i)]
-          [(GotoStatement? i)
-           (step-goto! m i)]
-          [(TestAndBranchStatement? i)
-           (step-test-and-branch! m i)]
-          [(PopEnvironment? i)
-           (step-pop-environment! m i)]
-          [(PushEnvironment? i)
-           (step-push-environment! m i)]
-          [(PushControlFrame? i)
-           (step-push-control-frame! m i)]
-          [(PopControlFrame? i)
-           (step-pop-control-frame! m i)]))
-  (increment-pc! m))
+  (let*: ([i : Statement (current-instruction m)]
+          [result : 'ok
+                  (cond
+                    [(symbol? i)
+                     'ok]
+                    [(AssignImmediateStatement? i)
+                     (step-assign-immediate! m i)]
+                    [(AssignPrimOpStatement? i)
+                     (step-assign-primitive-operation! m i)]
+                    [(PerformStatement? i)
+                     (step-perform! m i)]
+                    [(GotoStatement? i)
+                     (step-goto! m i)]
+                    [(TestAndBranchStatement? i)
+                     (step-test-and-branch! m i)]
+                    [(PopEnvironment? i)
+                     (step-pop-environment! m i)]
+                    [(PushEnvironment? i)
+                     (step-push-environment! m i)]
+                    [(PushControlFrame? i)
+                     (step-push-control-frame! m i)]
+                    [(PushControlFrame/Prompt? i)
+                     (step-push-control-frame/prompt! m i)]
+                    [(PopControlFrame? i)
+                     (step-pop-control-frame! m i)]
+                    [(PopControlFrame/Prompt? i)
+                     (step-pop-control-frame! m i)])])
+         (increment-pc! m)))
 
 
 
@@ -149,10 +154,23 @@
 
 (: step-push-control-frame! (machine PushControlFrame -> 'ok))
 (define (step-push-control-frame! m stmt)
-  (control-push! m (make-frame (PushControlFrame-label stmt)
-                               (ensure-closure-or-false (machine-proc m)))))
+  (control-push! m (make-CallFrame (PushControlFrame-label stmt)
+                                   (ensure-closure-or-false (machine-proc m)))))
 
-(: step-pop-control-frame! (machine PopControlFrame -> 'ok))
+(: step-push-control-frame/prompt! (machine PushControlFrame/Prompt -> 'ok))
+(define (step-push-control-frame/prompt! m stmt)
+  (control-push! m (make-PromptFrame
+                    (let ([tag (PushControlFrame/Prompt-tag stmt)])
+                      (cond 
+                        [(DefaultContinuationPromptTag? tag)
+                         default-continuation-prompt-tag-value]
+                        [(OpArg? tag)
+                         (ensure-continuation-prompt-tag-value (evaluate-oparg m tag))]))
+                    (PushControlFrame/Prompt-label stmt))))
+                        
+  
+
+(: step-pop-control-frame! (machine (U PopControlFrame PopControlFrame/Prompt) -> 'ok))
 (define (step-pop-control-frame! m stmt)
   (let: ([l : Symbol (control-pop! m)])
         'ok))
@@ -245,13 +263,33 @@
                  'ok)]
           
           [(RestoreControl!? op)
-           (set-machine-control! m (CapturedControl-frames (ensure-CapturedControl (env-ref m 0))))
-           'ok]
+           (let: ([tag-value : ContinuationPromptTagValue
+                             (let ([tag (RestoreControl!-tag op)])
+                               (cond
+                                 [(DefaultContinuationPromptTag? tag)
+                                  default-continuation-prompt-tag-value]
+                                 [(OpArg? tag)
+                                  (ensure-continuation-prompt-tag-value (evaluate-oparg m tag))]))])
+                 (set-machine-control! m (compose-continuation-frames 
+                                          (CapturedControl-frames (ensure-CapturedControl (env-ref m 0)))
+                                          (drop-continuation-to-tag (machine-control m)
+                                                                    tag-value)))
+                 'ok)]
 
           [(RestoreEnvironment!? op)
            (set-machine-env! m (CapturedEnvironment-vals (ensure-CapturedEnvironment (env-ref m 1))))
            (set-machine-stack-size! m (length (machine-env m)))
            'ok])))
+
+
+
+(: compose-continuation-frames ((Listof frame) (Listof frame) -> (Listof frame)))
+;; Stitch together the continuation.  A PromptFrame must exist at the head of frames-2.
+(define (compose-continuation-frames frames-1 frames-2)
+  (append frames-1 frames-2))
+
+
+
 
 
 (: get-target-updater (Target -> (machine SlotValue -> 'ok)))
@@ -325,20 +363,80 @@
                     (error 'apply-primitive-procedure)]))]
           
           [(GetControlStackLabel? op)
-           (target-updater! m (frame-return (first (machine-control m))))]
+           (target-updater! m (let ([frame (ensure-frame (first (machine-control m)))])
+                                (cond
+                                  [(PromptFrame? frame)
+                                   (PromptFrame-return frame)]
+                                  [(CallFrame? frame)
+                                   (CallFrame-return frame)])))]
 
           [(CaptureEnvironment? op)
            (target-updater! m (make-CapturedEnvironment (drop (machine-env m)
                                                               (CaptureEnvironment-skip op))))]
           [(CaptureControl? op)
-           (target-updater! m (make-CapturedControl (drop (machine-control m)
-                                                          (CaptureControl-skip op))))]
+           (target-updater! m (evaluate-continuation-capture m op))]
+          
           [(MakeBoxedEnvironmentValue? op)
            (target-updater! m (box (ensure-primitive-value
                                     (env-ref m (MakeBoxedEnvironmentValue-depth op)))))]
           
           [(CallKernelPrimitiveProcedure? op)
            (target-updater! m (evaluate-kernel-primitive-procedure-call m op))])))
+
+
+(: evaluate-continuation-capture (machine CaptureControl -> SlotValue))
+(define (evaluate-continuation-capture m op)
+  (let: ([frames : (Listof frame) (drop (machine-control m)
+                                        (CaptureControl-skip op))]
+         [tag : ContinuationPromptTagValue
+              (let ([tag (CaptureControl-tag op)])
+                (cond
+                  [(DefaultContinuationPromptTag? tag)
+                   default-continuation-prompt-tag-value]
+                  [(OpArg? tag)
+                   (ensure-continuation-prompt-tag-value (evaluate-oparg m tag))]))])
+        (make-CapturedControl (take-continuation-to-tag frames tag))))
+
+
+(: take-continuation-to-tag ((Listof frame) ContinuationPromptTagValue -> (Listof frame)))
+(define (take-continuation-to-tag frames tag)
+  (cond
+    [(empty? frames)
+     (error 'trim-continuation-at-tag "Unable to find continuation tag value ~s" tag)]
+    [else
+     (let ([a-frame (first frames)])
+       (cond
+         [(CallFrame? a-frame)
+          (cons a-frame (take-continuation-to-tag (rest frames) tag))]
+         [(PromptFrame? a-frame)
+          (cond
+            [(eq? (PromptFrame-tag a-frame) tag)
+             '()]
+            [else
+             (cons a-frame (take-continuation-to-tag (rest frames) tag))])]))]))
+
+
+(: drop-continuation-to-tag ((Listof frame) ContinuationPromptTagValue -> (Listof frame)))
+;; Drops continuation frames until we reach the appropriate one.
+(define (drop-continuation-to-tag frames tag)
+  (cond
+    [(empty? frames)
+     (error 'trim-continuation-at-tag "Unable to find continuation tag value ~s" tag)]
+    [else
+     (let ([a-frame (first frames)])
+       (cond
+         [(CallFrame? a-frame)
+          (drop-continuation-to-tag (rest frames) tag)]
+         [(PromptFrame? a-frame)
+          (cond
+            [(eq? (PromptFrame-tag a-frame) tag)
+             frames]
+            [else
+             (drop-continuation-to-tag (rest frames) tag)])]))]))
+
+
+
+
 
 
 (: evaluate-kernel-primitive-procedure-call (machine CallKernelPrimitiveProcedure -> PrimitiveValue))
@@ -381,7 +479,8 @@
            (let: loop : PrimitiveValue ([rand-vals : (Listof PrimitiveValue) rand-vals])
              (cond [(empty? rand-vals)
                     null]
-                   [(make-MutablePair (first rand-vals)
+                   [else
+                    (make-MutablePair (first rand-vals)
                                       (loop (rest rand-vals)))]))]
           [(null?)
            (null? (first rand-vals))]
@@ -453,11 +552,12 @@
      (let: ([v : SlotValue
                (list-ref (machine-env m) (EnvWholePrefixReference-depth an-oparg))])
            (cond
-             [(PrimitiveValue? v)
-              (error 'evaluate-oparg "Internal error: primitive value at depth ~s"
-                     (EnvWholePrefixReference-depth an-oparg))]
              [(toplevel? v)
-              v]))]))
+              v]
+             [else
+              (error 'evaluate-oparg "Internal error: not a toplevel at depth ~s: ~s"
+                     (EnvWholePrefixReference-depth an-oparg)
+                     v)]))]))
 
 
 (: ensure-closure-or-false (SlotValue -> (U closure #f)))
@@ -471,6 +571,18 @@
   (if (closure? v)
       v
       (error 'ensure-closure)))
+
+(: ensure-CallFrame (Any -> CallFrame))
+(define (ensure-CallFrame v)
+  (if (CallFrame? v)
+      v
+      (error 'ensure-CallFrame "not a CallFrame: ~s" v)))
+
+(: ensure-continuation-prompt-tag-value (Any -> ContinuationPromptTagValue))
+(define (ensure-continuation-prompt-tag-value v)
+  (if (ContinuationPromptTagValue? v)
+      v
+      (error 'ensure-ContinuationPromptTagValue "not a ContinuationPromptTagValue: ~s" v)))
 
 
 (: ensure-symbol (Any -> Symbol))
@@ -518,6 +630,17 @@
       x
       (error 'ensure-mutable-pair "not a mutable pair: ~s" x)))
 
+(: ensure-prompt-frame (Any -> PromptFrame))
+(define (ensure-prompt-frame x)
+  (if (PromptFrame? x)
+      x
+      (error 'ensure-prompt-frame "not a PromptFrame: ~s" x)))
+
+(: ensure-frame (Any -> frame))
+(define (ensure-frame x)
+  (if (frame? x)
+      x
+      (error 'ensure-frame "not a frame: ~s" x)))
 
 
 (: ensure-CapturedControl (Any -> CapturedControl))

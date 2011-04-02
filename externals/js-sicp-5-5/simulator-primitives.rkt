@@ -1,7 +1,5 @@
 #lang racket/base
 (require "simulator-structs.rkt"
-         "compile.rkt"
-         "bootstrapped-primitives.rkt"
          racket/math
          (for-syntax racket/base))
 
@@ -81,7 +79,8 @@
                    (vector-ref x 0)))
 
 (define my-set-box! (lambda (x v)
-                   (vector-set! x 0 v)))
+                      (vector-set! x 0 v)
+                      the-void-value))
 
 (define my-vector->list (lambda (v)
                           (apply my-list (vector->list v))))
@@ -98,15 +97,35 @@
                                 
 
 (define my-set-car! (lambda (p v)
-                      (set-MutablePair-h! p v)))
+                      (set-MutablePair-h! p v)
+                      the-void-value))
 
 (define my-set-cdr! (lambda (p v)
-                      (set-MutablePair-t! p v)))
+                      (set-MutablePair-t! p v)
+                      the-void-value))
+
+(define my-void (lambda args
+                  the-void-value))
+
+(define my-display (lambda args
+                     (apply display args)
+                     the-void-value))
+
+(define my-displayln (lambda args
+                       (apply displayln args)
+                       the-void-value))
+
+(define my-newline (lambda args
+                     (apply newline args)
+                     the-void-value))
+
+(define my-vector-set! (lambda args
+                         (apply vector-set! args)
+                         the-void-value))
 
 
 (define lookup-primitive (make-lookup #:functions (+ - * / = < <= > >= 
                                                      sub1
-                                                     display newline displayln
                                                      not
                                                      null?
                                                      eq?
@@ -114,12 +133,13 @@
                                                      sub1
                                                      zero?
                                                      abs
-                                                     void
+                                                     (my-void void)
                                                      quotient
                                                      remainder
-                                                     display
-                                                     displayln
-                                                     newline
+ 
+                                                     (my-display display)
+                                                     (my-displayln displayln)
+                                                     (my-newline newline)
                                                     
                                                      symbol->string
                                                      string-append
@@ -140,7 +160,7 @@
                                                      (my-set-box! set-box!)
                                                      
                                                      vector
-                                                     vector-set!
+                                                     (my-vector-set! vector-set!)
                                                      vector-ref
                                                      (my-vector->list vector->list)
                                                      (my-list->vector list->vector)

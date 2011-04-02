@@ -21,13 +21,13 @@
          (begin
            (printf "Running ~s ...\n" code)
            (let*-values([(a-machine num-steps) 
-                         (run (new-machine (run-compiler code)) options ...)]
+                         (run code options ...)]
                         [(actual) (PrimitiveValue->racket (machine-val a-machine))])
              (unless (equal? actual exp)
                (raise-syntax-error #f (format "Expected ~s, got ~s" exp actual)
                                    #'stx))
-             (unless (= (machine-stack-size a-machine) 1)
-               (raise-syntax-error #f (format "Stack is not back to the prefix as expected!")
+             (unless (= (machine-stack-size a-machine) 0)
+               (raise-syntax-error #f (format "Stack is not back to empty as expected!")
 
                                    #'stx))
              (unless (null? (machine-control a-machine))
@@ -47,7 +47,7 @@
              (with-handlers ([exn:fail? (lambda (exn)
                                           (printf "ok\n\n")
                                           (return))])
-               (run (new-machine (run-compiler code)) options ...))
+               (run code options ...))
              (raise-syntax-error #f (format "Expected an exception")
                                  #'stx)))))]))
 
@@ -55,32 +55,33 @@
 
 ;; run: machine -> (machine number)
 ;; Run the machine to completion.
-(define (run m 
+(define (run code
              #:debug? (debug? false)
              #:stack-limit (stack-limit false)
-             #:control-limit (control-limit false))
-  
-  (let loop ([steps 0])
-    (when debug?
-      (when (can-step? m)
-        (printf "|env|=~s, |control|=~s,  instruction=~s\n" 
-                (length (machine-env m))
-                (length (machine-control m))
-                (current-instruction m))))
-    (when stack-limit
-      (when (> (machine-stack-size m) stack-limit)
-        (error 'run "Stack overflow")))
-    
-    (when control-limit
-      (when (> (machine-control-size m) control-limit)
-        (error 'run "Control overflow")))
-
-    (cond
-      [(can-step? m)
-       (step! m)
-       (loop (add1 steps))]
-      [else
-       (values m steps)])))
+             #:control-limit (control-limit false)
+             #:with-bootstrapping? (with-bootstrapping? false))
+  (let ([m (new-machine (run-compiler code) with-bootstrapping?)])
+    (let loop ([steps 0])
+      (when debug?
+        (when (can-step? m)
+          (printf "|env|=~s, |control|=~s,  instruction=~s\n" 
+                  (length (machine-env m))
+                  (length (machine-control m))
+                  (current-instruction m))))
+      (when stack-limit
+        (when (> (machine-stack-size m) stack-limit)
+          (error 'run "Stack overflow")))
+      
+      (when control-limit
+        (when (> (machine-control-size m) control-limit)
+          (error 'run "Control overflow")))
+      
+      (cond
+        [(can-step? m)
+         (step! m)
+         (loop (add1 steps))]
+        [else
+         (values m steps)]))))
 
 
 ;; Atomic expressions
@@ -243,6 +244,7 @@
                         1
                         (* x (f (sub1 x)))))])
         (f 1000))
+      #:control-limit 3
       #:stack-limit 8)
 
 
@@ -299,6 +301,25 @@
 (test '(+ (+ 3 (+ 4 5))
           6)
       (+ 3 4 5 6))
+
+
+
+(test '(begin 
+         (define (foo y)
+           y)
+         (define (sum-iter x acc)
+           (if (= x 0)
+               acc
+               (let* ([y (sub1 x)]
+                      [z (+ x acc)])
+                 (foo y)
+                 (sum-iter y z))))
+         (sum-iter 300 0))
+      45150
+      #:stack-limit 8
+      #:control-limit 4)
+
+
 
 
 ;; deriv
@@ -443,7 +464,7 @@
       33644764876431783266621612005107543310302148460680063906564769974680081442166662368155595513633734025582065332680836159373734790483865268263040892463056431887354544369559827491606602099884183933864652731300088830269235673613135117579297437854413752130520504347701602264758318906527890855154366159582987279682987510631200575428783453215515103870818298969791613127856265033195487140214287532698187962046936097879900350962302291026368131493195275630227837628441540360584402572114334961180023091208287046088923962328835461505776583271252546093591128203925285393434620904245248929403901706233888991085841065183173360437470737908552631764325733993712871937587746897479926305837065742830161637408969178426378624212835258112820516370298089332099905707920064367426202389783111470054074998459250360633560933883831923386783056136435351892133279732908133732642652633989763922723407882928177953580570993691049175470808931841056146322338217465637321248226383092103297701648054726243842374862411453093812206564914032751086643394517512161526545361333111314042436854805106765843493523836959653428071768775328348234345557366719731392746273629108210679280784718035329131176778924659089938635459327894523777674406192240337638674004021330343297496902028328145933418826817683893072003634795623117103101291953169794607632737589253530772552375943788434504067715555779056450443016640119462580972216729758615026968443146952034614932291105970676243268515992834709891284706740862008587135016260312071903172086094081298321581077282076353186624611278245537208532365305775956430072517744315051539600905168603220349163222640885248852433158051534849622434848299380905070483482449327453732624567755879089187190803662058009594743150052402532709746995318770724376825907419939632265984147498193609285223945039707165443156421328157688908058783183404917434556270520223564846495196112460268313970975069382648706613264507665074611512677522748621598642530711298441182622661057163515069260029861704945425047491378115154139941550671256271197133252763631939606902895650288268608362241082050562430701794976171121233066073310059947366875
       
       #:stack-limit 10
-      #:control-limit 1)
+      #:control-limit 3)
                   
 
 
@@ -577,37 +598,45 @@
           (sum-iter 300 0))
       45150
       #:stack-limit 8
-      #:control-limit 1)
+      #:control-limit 3)
+
+
+
+
+
 
 
 (test '(let ([x 16])
-        (call/cc (lambda (k) (+ x x))))
-      32)
+           (call/cc (lambda (k) (+ x x))))
+      32
+      #:with-bootstrapping? #t)
 
 
 (test '(add1 (let ([x 16])
-              (call/cc (lambda (k) 
-                         (k 0)
-                         (+ x x)))))
-      1)
+               (call/cc (lambda (k) 
+                          (k 0)
+                          (+ x x)))))
+      1
+      #:with-bootstrapping? #t)
 
 
 ;; Reference:  http://lists.racket-lang.org/users/archive/2009-January/029812.html
 (let ([op (open-output-string)])
   (parameterize ([current-simulated-output-port op])
     (test '(begin (define program (lambda ()
-                                 (let ((y (call/cc (lambda (c) c))))
-                                   (display 1)
-                                   (call/cc (lambda (c) (y c)))
-                                   (display 2)
-                                   (call/cc (lambda (c) (y c)))
-                                   (display 3))))
-               (program))
-        (void))
+                                    (let ((y (call/cc (lambda (c) c))))
+                                      (display 1)
+                                      (call/cc (lambda (c) (y c)))
+                                      (display 2)
+                                      (call/cc (lambda (c) (y c)))
+                                      (display 3))))
+                  (program))
+          (void)
+          #:with-bootstrapping? #t)
     (unless (string=? (get-output-string op)
                       "11213")
       (error "puzzle failed: ~s" (get-output-string op)))))
-                
+
 
 
 
@@ -643,7 +672,8 @@
                                      x
                                      y))))))))
         (ctak 18 12 6))
-      7)
+      7
+      #:with-bootstrapping? #t)
 
 
 (test '(let ([x 3]
@@ -769,6 +799,72 @@
     (error 'letrec-failed)))
       
 
+(test '(letrec ([a (lambda ()
+                     (b))]
+                [b (lambda ()
+                     (c))]
+                [c (lambda ()
+                     (d))]
+                [d (lambda ()
+                     (e))]
+                [e (lambda ()
+                     (f))]
+                [f (lambda ()
+                     (g))]
+                [g (lambda ()
+                     "gee!")])
+         (a))
+      "gee!"
+      #:stack-limit 9
+      #:control-limit 2)
+
+
+
+(test '(letrec ([a (lambda ()
+                     (b))]
+                [b (lambda ()
+                     (c))]
+                [c (lambda ()
+                     (d))]
+                [d (lambda ()
+                     (e))]
+                [e (lambda ()
+                     (f))]
+                [f (lambda ()
+                     (g))]
+                [g (lambda ()
+                     "gee!")]
+                [h (lambda ()
+                     "ho!")])
+         (a))
+      "gee!"
+      #:stack-limit 12
+      #:control-limit 2)
+
+
+
+
+(test '(letrec ([a (lambda (lst)
+                       (b (cons "a" lst)))]
+                  [b (lambda (lst)
+                       (c (cons "b" lst)))]
+                  [c (lambda (lst)
+                       (d (cons "c" lst)))]
+                  [d (lambda (lst)
+                       (e (cons "d" lst)))]
+                  [e (lambda (lst)
+                       (f (cons "e" lst)))]
+                  [f (lambda (lst)
+                       (g (cons "f" lst)))]
+                  [g (lambda (lst)
+                       (cons "gee!" lst))])
+           (a '()))
+        '("gee!" "f" "e" "d" "c" "b" "a")
+        #:stack-limit 12
+        #:control-limit 2)
+
+
+
 
 
 
@@ -782,11 +878,141 @@
             (sum-iter 300 0))
         45150
         #:stack-limit 10
-        #:control-limit 1)
+        #:control-limit 3)
+
+
+(test '(begin (define counter
+                (let ([x 0])
+                  (lambda ()
+                    (set! x (add1 x))
+                    x)))
+              (list (counter) (counter) (counter)))
+      '(1 2 3))
 
 
 
 
+(test '(begin
+           (define (make-gen gen) 
+             (let ([cont (box #f)])     
+               (lambda ()
+                 (call/cc (lambda (caller)
+                            (if (unbox cont)
+                                ((unbox cont) caller)
+                                (gen (lambda (v)
+                                       (call/cc (lambda (gen-k)
+                                                  (begin
+                                                    (set-box! cont gen-k)
+                                                    (caller v))))))))))))
+           
+           (define g1 (make-gen (lambda (return)
+                                  (return "a")
+                                  (return "b")
+                                  (return "c"))))
+        
+           (list (g1)))
+      
+        (list "a")
+        #:with-bootstrapping? #t)
+
+
+
+
+
+(test '(begin (define (f)
+                  (define cont #f)
+                  (define n 0)
+                  (call/cc (lambda (x) (set! cont x)))
+                  (set! n (add1 n))
+                  (if (< n 10)
+                    (cont 'dontcare))
+                  n)
+                (f))
+        10
+        #:with-bootstrapping? #t)
+
+
+;; This should produce 1 because there's a continuation prompt around each evaluation,
+;; and the call/cc cuts off at the prompt.
+(test '(begin 
+           (define cont #f)
+           (define n 0)
+           (call/cc (lambda (x) (set! cont x)))
+           (set! n (add1 n))
+           (if (< n 10)
+             (cont 'dontcare))
+           n)
+        1
+        #:with-bootstrapping? #t)
+
+
+
+(test '(begin
+         (define (make-gen gen) 
+           (let ([cont (box #f)])     
+             (lambda ()
+               (call/cc (lambda (caller)
+                          (if (unbox cont)
+                              ((unbox cont) caller)
+                              (gen (lambda (v)
+                                     (call/cc (lambda (gen-k)
+                                                (begin
+                                                  (set-box! cont gen-k)
+                                                  (caller v))))))))))))
+         
+         (define g1 (make-gen (lambda (return)
+                                (return "a")
+                                (return "b")
+                                (return "c"))))
+         
+         (g1)
+         (g1))
+      "b"
+      #:with-bootstrapping? #t)
+
+
+
+(let ([op (open-output-string)])
+  (parameterize ([current-simulated-output-port op])
+    (test '(begin
+             (define (make-gen gen) 
+               (let ([cont (box #f)])     
+                 (lambda ()
+                   (call/cc (lambda (caller)
+                              (if (unbox cont)
+                                  ((unbox cont) caller)
+                                  (gen (lambda (v)
+                                         (call/cc (lambda (gen-k)
+                                                    (begin
+                                                      (set-box! cont gen-k)
+                                                      (caller v))))))))))))
+             
+             (define g1 (make-gen (lambda (return)
+                                    (return "a")
+                                    (return "b")
+                                    (return "c"))))
+             
+             (displayln (g1))
+             (displayln (g1))
+             (displayln (g1)))
+          (void)
+          #:with-bootstrapping? #t))
+  (unless (string=? (get-output-string op) "a\nb\nc\n")
+    (error 'failure)))
+
+
+(test '(begin (define K #f)
+              (let ([x 3]
+                    [y 4]
+                    [z 5])
+                (+ x y z (call/cc (lambda (r)
+                                    (set! K r)
+                                    0))))
+              (let* ([a 0]
+                     [b 1])
+                (+ 1024 (K 17))))
+      29
+      #:with-bootstrapping? #t)
 
 
 

@@ -376,8 +376,8 @@ EOF
                      ;"00FFFF" ;; aqua
                      "008080" ;; teal
 
-                     ;"000080" ;; navy
-                     ;"FF00FF" ;; fushia
+                     "000080" ;; navy
+                     "FF00FF" ;; fushia
                      "800080" ;; purple
                      ))
 

@@ -7,7 +7,7 @@
 
 
 (define-type PrimitiveValue (Rec PrimitiveValue (U String Number Symbol Boolean
-                                                   Null Void
+                                                   Null VoidValue
                                                    undefined
                                                    
                                                    primitive-proc 
@@ -22,6 +22,10 @@
                           toplevel
                           CapturedControl
                           CapturedEnvironment))
+
+
+(define-struct: VoidValue () #:transparent)
+(define the-void-value (make-VoidValue))
 
 
 (define-struct: MutablePair ([h : PrimitiveValue]
@@ -51,12 +55,25 @@
   #:mutable)
 
 
-(define-struct: frame ([return : Symbol]
-                       ;; The procedure being called.  Used to optimize self-application
-                       [proc : (U closure #f)]
-                       ;; TODO: add continuation marks
-                       )
+(define-type frame (U CallFrame PromptFrame))
+
+(define-struct: CallFrame ([return : Symbol]
+                           ;; The procedure being called.  Used to optimize self-application
+                           [proc : (U closure #f)]
+                           ;; TODO: add continuation marks
+                           )
   #:transparent)
+(define-struct: PromptFrame ([tag : ContinuationPromptTagValue]
+                             [return : Symbol])
+  #:transparent)
+
+(define-struct: ContinuationPromptTagValue ([name : Symbol])
+  #:transparent)
+
+(define default-continuation-prompt-tag-value 
+  (make-ContinuationPromptTagValue 'default-continuation-prompt))
+
+
 
 (define-struct: toplevel ([names : (Listof (U #f Symbol ModuleVariable))]
                           [vals : (Listof PrimitiveValue)])
@@ -92,3 +109,4 @@
 
 
 (define-predicate PrimitiveValue? PrimitiveValue)
+(define-predicate frame? frame)

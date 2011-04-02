@@ -38,7 +38,7 @@ EOF
      (with-syntax ([stx stx])
        (syntax/loc #'stx
          (begin
-           (printf "running test...")
+           (printf "running test... ~s" (syntax->datum #'stx))
            (let ([result (evaluate s)])
              (let ([output (evaluated-stdout result)])
                (unless (string=? output exp)
@@ -66,6 +66,7 @@ EOF
                (raise-syntax-error #f (format "Expected ~s, got ~s" exp (error-happened-str an-error-happened))
                                    #'stx))
              (printf " ok (~a milliseconds)\n" (error-happened-t an-error-happened))))))]))
+
 
 
 
@@ -216,6 +217,19 @@ EOF
                         (tak (- z 1) x y))))
              (displayln (tak 18 12 6)))
         "7\n")
+
+
+
+(test '(begin (displayln (+ 42 (call/cc (lambda (k) 3)))) )
+      "45\n")
+
+
+(test '(begin (displayln (+ 42 (call/cc (lambda (k) (k 100) 3)))) )
+      "142\n")
+
+(test '(begin (displayln (+ 42 (call/cc (lambda (k) 100 (k 3))))) )
+      "45\n")
+
 
 (test '(begin (define program (lambda ()
                                 (let ((y (call/cc (lambda (c) c))))
