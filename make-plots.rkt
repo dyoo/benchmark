@@ -280,12 +280,16 @@ EOF
    (car l) l))
 
 (define (make-plot name)
-  (let* ([points (second (assoc name analyzed-points))]
-         [platform-names (remove "racket" (unique-strings (map analyzed-point-platform points)))]
-         [colors (map platform-name->color platform-names)]
-         [min-days 0 #;(apply min (map analyzed-point-day points))]
-         [max-days (apply max (map analyzed-point-day points))]
-         [min-times-slower (apply min (map analyzed-point-times-slower points))]
+  (let ([points (second (assoc name analyzed-points))])
+    (cond
+     [(empty? points)
+      (void)]
+     [else
+      (let* ([platform-names (remove "racket" (unique-strings (map analyzed-point-platform points)))]
+	     [colors (map platform-name->color platform-names)]
+	     [min-days 0 #;(apply min (map analyzed-point-day points))]
+	     [max-days (apply max (map analyzed-point-day points))]
+	     [min-times-slower (apply min (map analyzed-point-times-slower points))]
          [max-times-slower (apply max (map analyzed-point-times-slower points))]
          [point-text (string-join 
                       (map (lambda (platform-name)
@@ -359,7 +363,7 @@ EOF
             (string-join colors ",")
             (string-join platform-names "|")
             point-text
-            )))
+            ))])))
 
 
 (define WEB-COLORS '(;"FFFFFF" ;; white
