@@ -2,7 +2,7 @@
 (require "expression-structs.rkt"
          "lexical-structs.rkt"
          "il-structs.rkt"
-         "compile.rkt"
+         "compiler.rkt"
          "typed-parse.rkt"
          "parameters.rkt")
 
@@ -37,18 +37,19 @@
                                     (make-CaptureControl 0 default-continuation-prompt-tag))
        ,(make-AssignPrimOpStatement (make-EnvLexicalReference 1 #f)
                                     ;; When capturing, skip over f and the two slots we just added.
-                                    (make-CaptureEnvironment 3))
+                                    (make-CaptureEnvironment 3 default-continuation-prompt-tag))
        ,(make-AssignPrimOpStatement (adjust-target-depth (make-EnvLexicalReference 0 #f) 2)
                                     (make-MakeCompiledProcedure call/cc-closure-entry
                                                                 1 ;; the continuation consumes a single value
                                                                 (list 0 1)
                                                                 'call/cc))
-       ,(make-PopEnvironment 2 0)))
-    
+       ,(make-PopEnvironment (make-Const 2) 
+                             (make-Const 0))))
+       
     ;; Finally, do a tail call into f.
+    (make-instruction-sequence `(,(make-AssignImmediateStatement 'argcount (make-Const 1))))
     (compile-general-procedure-call '()
-                                    '(?)
-                                    1 
+                                    (make-Const 1) ;; the stack at this point holds a single argument
                                     'val
                                     return-linkage)
     
@@ -142,6 +143,9 @@
 	      
 
    
+   
+   
+   
    ;; The call/cc code is special:
    (let ([after-call/cc-code (make-label 'afterCallCCImplementation)])
      (append 
@@ -152,4 +156,63 @@
                                      (make-MakeCompiledProcedure call/cc-label 1 '() 'call/cc))
         ,(make-GotoStatement (make-Label after-call/cc-code)))
       (make-call/cc-code)
-      `(,after-call/cc-code)))))
+      `(,after-call/cc-code)))
+   
+  
+   
+   ;; values
+   (let ([after-values-body-defn (make-label 'afterValues)]
+         [values-entry (make-label 'valuesEntry)]
+         [on-single-value (make-label 'onSingleValue)])
+     `(,(make-GotoStatement (make-Label after-values-body-defn))
+       ,values-entry
+       ,(make-TestAndBranchStatement 'one? 'argcount on-single-value)
+       ;; values simply keeps the values on the stack, preserves the argcount, and does a return
+       ;; to the multiple-value-return address.
+       ,(make-AssignPrimOpStatement 'proc (make-GetControlStackLabel/MultipleValueReturn))
+       ,(make-PopControlFrame)
+       ,(make-GotoStatement (make-Reg 'proc))
+       ,on-single-value
+       ,(make-AssignPrimOpStatement 'proc (make-GetControlStackLabel))
+       ,(make-AssignImmediateStatement 'val (make-EnvLexicalReference 0 #f))
+       ,(make-PopEnvironment (make-Const 1) (make-Const 0))
+       ,(make-PopControlFrame)
+       ,(make-GotoStatement (make-Reg 'proc))
+       
+       
+       ,after-values-body-defn
+       ,(make-AssignPrimOpStatement (make-PrimitivesReference 'values)
+                                    (make-MakeCompiledProcedure values-entry
+                                                                (make-ArityAtLeast 0) 
+                                                                '() 
+                                                                'values))))  
+   
+   
+   
+   
+   ;; As is apply:
+   (let ([after-apply-code (make-label 'afterApplyCode)]
+         [apply-entry (make-label 'applyEntry)])
+     `(,(make-GotoStatement (make-Label after-apply-code))
+       ,apply-entry
+       
+       ;; Push the procedure into proc.
+       ,(make-AssignImmediateStatement 'proc (make-EnvLexicalReference 0 #f))
+       ,(make-PopEnvironment (make-Const 1) (make-Const 0))
+       ;; Correct the number of arguments to be passed.
+       ,(make-AssignImmediateStatement 'argcount (make-SubtractArg (make-Reg 'argcount)
+                                                                   (make-Const 1)))
+       ;; Splice in the list argument.
+       ,(make-PerformStatement (make-SpliceListIntoStack! (make-SubtractArg (make-Reg 'argcount)
+                                                                            (make-Const 1))))
+       
+       ;; Finally, jump into the procedure body
+       ,@(statements (compile-general-procedure-call '()
+                                                     (make-Reg 'argcount) ;; the stack contains only the argcount elements.
+                                                     'val
+                                                     return-linkage))
+       
+       
+       ,after-apply-code
+       ,(make-AssignPrimOpStatement (make-PrimitivesReference 'apply)
+                                    (make-MakeCompiledProcedure apply-entry (make-ArityAtLeast 2) '() 'apply))))))

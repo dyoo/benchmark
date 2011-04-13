@@ -3,7 +3,7 @@
 (require "simulator.rkt"
          "simulator-structs.rkt"
          "simulator-helpers.rkt"
-         "compile.rkt"
+         "compiler.rkt"
          "parse.rkt"
          "il-structs.rkt")
 
@@ -1012,6 +1012,72 @@
                      [b 1])
                 (+ 1024 (K 17))))
       29
+      #:with-bootstrapping? #t)
+
+
+
+(test '(begin (define (m f x y)
+                (f (f x y) y))
+              (m + 7 4))
+      15)
+
+(test '(begin (define (m f x y)
+                (f (f x y) y))
+              (m - 7 4))
+      -1)
+
+
+(test '(apply + '(1 2 3))
+      6
+      #:with-bootstrapping? #t)
+
+(test '(apply + 4 5 6 '(1 2 3))
+      21
+      #:with-bootstrapping? #t)
+(test '(apply string-append '("this" "is" "a" "test"))
+      "thisisatest"
+      #:with-bootstrapping? #t)
+
+(test '(begin (define (f x y z)
+                (cons x (cons y z)))
+              (apply f (list "shiny" "happy" "monsters")))
+      (cons "shiny" (cons "happy" "monsters"))
+      #:with-bootstrapping? #t)
+
+
+;; Some tests with vararity functions
+(test `(begin (define mylist (lambda args args))
+              (mylist 3 4 5))
+      (list 3 4 5))
+
+(test `(begin (define mylist (lambda args args))
+              (apply mylist 3 4 5 '(6 7)))
+      (list 3 4 5 6 7)
+      #:with-bootstrapping? #t)
+
+(test `(letrec ([f (lambda (x y . rest)
+                     (apply g rest))]
+                [g (lambda (x y z)
+                     (list z y x))])
+         (f 3 1 4 1 5))
+      (list 5 1 4)
+      #:with-bootstrapping? #t)
+
+(test '(letrec ([sum-iter (lambda (x acc)
+                               (if (apply = x 0 '())
+                                   acc
+                                   (let* ([y (apply sub1 x '())]
+                                          [z (apply + (list x acc))])
+                                     (apply sum-iter (list y z)))))])
+            (sum-iter 300 0))
+        45150
+        #:stack-limit 10
+        #:control-limit 3
+        #:with-bootstrapping? #t)
+
+
+(test '(values 3)
+      3
       #:with-bootstrapping? #t)
 
 

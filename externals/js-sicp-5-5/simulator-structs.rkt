@@ -39,6 +39,7 @@
 
 (define-struct: machine ([val : SlotValue]
                          [proc : SlotValue]
+                         [argcount : SlotValue]
                          [env : (Listof SlotValue)]
                          [control : (Listof frame)]
 
@@ -57,14 +58,17 @@
 
 (define-type frame (U CallFrame PromptFrame))
 
-(define-struct: CallFrame ([return : Symbol]
+(define-struct: CallFrame ([return : (U Symbol LinkedLabel)]
                            ;; The procedure being called.  Used to optimize self-application
                            [proc : (U closure #f)]
                            ;; TODO: add continuation marks
                            )
-  #:transparent)
+  #:transparent
+  #:mutable)
+
 (define-struct: PromptFrame ([tag : ContinuationPromptTagValue]
-                             [return : Symbol])
+                             [return : (U Symbol LinkedLabel)]
+                             [env-depth : Natural])
   #:transparent)
 
 (define-struct: ContinuationPromptTagValue ([name : Symbol])
@@ -85,14 +89,17 @@
 
 
 ;; Primitive procedure wrapper
-(define-struct: primitive-proc ([f : (machine PrimitiveValue * -> PrimitiveValue)])
+(define-struct: primitive-proc ([f : (machine PrimitiveValue * -> PrimitiveValue)]
+                                [arity : Arity]
+                                [display-name : (U Symbol False)])
   #:transparent)
+
 
 
 
 ;; Compiled procedure closures
 (define-struct: closure ([label : Symbol]
-                         [arity : Natural]
+                         [arity : Arity]
                          [vals : (Listof SlotValue)]
                          [display-name : (U Symbol False)])
   #:transparent

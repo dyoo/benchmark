@@ -24,10 +24,12 @@
   (let ([basic-blocks (fracture stmts)])
     (fprintf op "(function(MACHINE, success, fail, params) {\n")
     (fprintf op "var param;\n")
+    (fprintf op "var RUNTIME = plt.runtime;\n")
     (for-each (lambda: ([basic-block : BasicBlock])
                        (displayln (assemble-basic-block basic-block) op)
                        (newline op))
               basic-blocks)
+    (write-linked-label-attributes stmts op)
     (fprintf op "MACHINE.params.currentErrorHandler = fail;\n")
     (fprintf op "MACHINE.params.currentSuccessHandler = success;\n")
     (fprintf op #<<EOF
@@ -38,7 +40,7 @@ for (param in params) {
 }
 EOF
              )
-    (fprintf op "trampoline(MACHINE, ~a); })"
+    (fprintf op "RUNTIME.trampoline(MACHINE, ~a); })"
              (BasicBlock-name (first basic-blocks)))))
 
 
@@ -67,36 +69,85 @@ EOF
             [(null? stmts)
              (reverse (cons (make-BasicBlock name (reverse acc))
                             basic-blocks))]
-            [(symbol? (car stmts))
-             (cond
-               [(member (car stmts) jump-targets)
-                (loop (car stmts)
-                      '()
-                      (cons (make-BasicBlock name  
-                                             (if last-stmt-goto? 
-                                                 (reverse acc)
-                                                 (reverse (append `(,(make-GotoStatement (make-Label (car stmts))))
-                                                                  acc))))
-                            basic-blocks)
-                      (cdr stmts)
-                      last-stmt-goto?)]
-               [else
-                (loop name
-                      acc
-                      basic-blocks
-                      (cdr stmts)
-                      last-stmt-goto?)])]
             [else
-             (loop name
-                   (cons (car stmts) acc)
-                   basic-blocks
-                   (cdr stmts)
-                   (GotoStatement? (car stmts)))]))))
+             (let ([first-stmt (car stmts)])
+               (: do-on-label (Symbol -> (Listof BasicBlock)))
+               (define (do-on-label label-name)
+                 (cond
+                    [(member label-name jump-targets)
+                     (loop label-name
+                           '()
+                           (cons (make-BasicBlock 
+                                  name  
+                                  (if last-stmt-goto? 
+                                      (reverse acc)
+                                      (reverse (append `(,(make-GotoStatement (make-Label label-name)))
+                                                       acc))))
+                                 basic-blocks)
+                           (cdr stmts)
+                           last-stmt-goto?)]
+                    [else
+                     (loop name
+                           acc
+                           basic-blocks
+                           (cdr stmts)
+                           last-stmt-goto?)]))
+               (cond
+                 [(symbol? first-stmt)
+                  (do-on-label first-stmt)]
+                 [(LinkedLabel? first-stmt)
+                  (do-on-label (LinkedLabel-label first-stmt))]
+                 [else
+                  (loop name
+                        (cons first-stmt acc)
+                        basic-blocks
+                        (cdr stmts)
+                        (GotoStatement? (car stmts)))]))]))))
 
 
+(: write-linked-label-attributes ((Listof Statement) Output-Port -> 'ok))
+(define (write-linked-label-attributes stmts op)
+  (cond
+    [(empty? stmts)
+     'ok]
+    [else
+     (let ([stmt (first stmts)])
 
+       (define (next) (write-linked-label-attributes (rest stmts) op))
 
-
+       (cond
+         [(symbol? stmt)
+          (next)]
+         [(LinkedLabel? stmt)
+          (fprintf op "~a.multipleValueReturn = ~a;\n" 
+                   (LinkedLabel-label stmt)
+                   (LinkedLabel-linked-to stmt))
+          (next)]
+         [(AssignImmediateStatement? stmt)
+          (next)]
+         [(AssignPrimOpStatement? stmt)
+          (next)]
+         [(PerformStatement? stmt)
+          (next)]
+         [(TestAndBranchStatement? stmt)
+          (next)]
+         [(GotoStatement? stmt)
+          (next)]
+         [(PushEnvironment? stmt)
+          (next)]
+         [(PopEnvironment? stmt)
+          (next)]
+         [(PushImmediateOntoEnvironment? stmt)
+          (next)]
+         [(PushControlFrame? stmt)
+          (next)]
+         [(PushControlFrame/Prompt? stmt)
+          (next)]
+         [(PopControlFrame? stmt)
+          (next)]
+         [(PopControlFrame/Prompt? stmt)
+          (next)]))]))
+       
 
 ;; collect-general-jump-targets: (listof stmt) -> (listof label)
 ;; collects all the labels that are potential targets for GOTOs or branches.
@@ -116,7 +167,10 @@ EOF
       [(EnvPrefixReference? an-input)
        empty]
       [(EnvWholePrefixReference? an-input)
-       empty]))
+       empty]
+      [(SubtractArg? an-input)
+       (append (collect-input (SubtractArg-lhs an-input))
+               (collect-input (SubtractArg-rhs an-input)))]))
   
   (: collect-location ((U Reg Label) -> (Listof Symbol)))
   (define (collect-location a-location)
@@ -139,6 +193,8 @@ EOF
        empty]
       [(GetControlStackLabel? op)
        empty]
+      [(GetControlStackLabel/MultipleValueReturn? op)
+       empty]
       [(CaptureEnvironment? op)
        empty]
       [(CaptureControl? op)
@@ -155,6 +211,8 @@ EOF
        empty]
       [(CheckClosureArity!? op)
        empty]
+      [(CheckPrimitiveArity!? op)
+       empty]
       [(ExtendEnvironment/Prefix!? op)
        empty]
       [(InstallClosureValues!? op)
@@ -162,6 +220,12 @@ EOF
       [(RestoreEnvironment!? op)
        empty]
       [(RestoreControl!? op)
+       empty]
+      [(SetFrameCallee!? op)
+       empty]
+      [(SpliceListIntoStack!? op)
+       empty]
+      [(UnspliceRestFromStack!? op)
        empty]
       [(FixClosureShellMap!? op)
        empty]))
@@ -175,21 +239,12 @@ EOF
                   (append (cond
                             [(symbol? stmt)
                              empty]
+                            [(LinkedLabel? stmt)
+                             (list (LinkedLabel-label stmt)
+                                   (LinkedLabel-linked-to stmt))]
                             [(AssignImmediateStatement? stmt)
                              (let: ([v : OpArg (AssignImmediateStatement-value stmt)])
-                                   (cond 
-                                     [(Reg? v)
-                                      empty]
-                                     [(Label? v)
-                                      (list (Label-name v))]
-                                     [(Const? v)
-                                      empty]
-                                     [(EnvLexicalReference? v)
-                                      empty]
-                                     [(EnvPrefixReference? v)
-                                      empty] 
-                                     [(EnvWholePrefixReference? v)
-                                      empty]))]
+                                   (collect-input v))]
                             [(AssignPrimOpStatement? stmt)
                              (collect-primitive-operator (AssignPrimOpStatement-op stmt))]
                             [(PerformStatement? stmt)
@@ -202,17 +257,26 @@ EOF
                              empty]
                             [(PopEnvironment? stmt)
                              empty]
+                            [(PushImmediateOntoEnvironment? stmt)
+                             (collect-input (PushImmediateOntoEnvironment-value stmt))]
                             [(PushControlFrame? stmt)
-                             (list (PushControlFrame-label stmt))]
+                             (label->labels (PushControlFrame-label stmt))]
                             [(PushControlFrame/Prompt? stmt)
-                             (list (PushControlFrame/Prompt-label stmt))]
+                             (label->labels (PushControlFrame/Prompt-label stmt))]
                             [(PopControlFrame? stmt)
                              empty]
                             [(PopControlFrame/Prompt? stmt)
                              empty])
                           (loop (rest stmts))))]))))
 
-
+(: label->labels ((U Symbol LinkedLabel) -> (Listof Symbol)))
+(define (label->labels label)
+  (cond
+    [(symbol? label)
+     (list label)]
+    [(LinkedLabel? label)
+     (list (LinkedLabel-label label)
+           (LinkedLabel-linked-to label))]))
 
 
 ;; assemble-basic-block: basic-block -> string
@@ -256,6 +320,10 @@ EOF
                 (format "if (! ~a) { ~a }"
                         (assemble-reg (make-Reg (TestAndBranchStatement-register stmt)))
                         (assemble-jump (make-Label (TestAndBranchStatement-label stmt))))]
+               [(eq? test 'one?)
+                (format "if (~a === 1) { ~a }"
+                        (assemble-reg (make-Reg (TestAndBranchStatement-register stmt)))
+                        (assemble-jump (make-Label (TestAndBranchStatement-label stmt))))]
                [(eq? test 'primitive-procedure?)
                 (format "if (typeof(~a) === 'function') { ~a };"
                         (assemble-reg (make-Reg (TestAndBranchStatement-register stmt)))
@@ -265,38 +333,70 @@ EOF
       (assemble-jump (GotoStatement-target stmt))]
 
      [(PushControlFrame? stmt)
-      (format "MACHINE.control.push(new CallFrame(~a, MACHINE.proc));" (PushControlFrame-label stmt))]
+      (format "MACHINE.control.push(new RUNTIME.CallFrame(~a, MACHINE.proc));" 
+              (let ([label (PushControlFrame-label stmt)])
+                (cond
+                  [(symbol? label) label]
+                  [(LinkedLabel? label) (LinkedLabel-label label)])))]
+
      [(PushControlFrame/Prompt? stmt)
       ;; fixme: use a different frame structure
-      (format "MACHINE.control.push(new PromptFrame(~a, ~a));" 
-              (PushControlFrame/Prompt-label stmt)
+      (format "MACHINE.control.push(new RUNTIME.PromptFrame(~a, ~a));" 
+              (let ([label (PushControlFrame/Prompt-label stmt)])
+                (cond
+                  [(symbol? label) label]
+                  [(LinkedLabel? label) (LinkedLabel-label label)]))
+
               (let ([tag (PushControlFrame/Prompt-tag stmt)])
                 (cond
                   [(DefaultContinuationPromptTag? tag)
                    (assemble-default-continuation-prompt-tag)]
                   [(OpArg? tag)
                    (assemble-oparg tag)])))]
+     
      [(PopControlFrame? stmt)
       "MACHINE.control.pop();"]
+     
      [(PopControlFrame/Prompt? stmt)
       "MACHINE.control.pop();"]
-     [(PushEnvironment? stmt)
-      (format "MACHINE.env.push(~a);" (string-join
-                                       (build-list (PushEnvironment-n stmt) 
-                                                   (lambda: ([i : Natural])
-                                                            (if (PushEnvironment-unbox? stmt)
-                                                                "[undefined]"
-                                                                "undefined")))
-                                       ", "))]
-     [(PopEnvironment? stmt)
-      (if (= (PopEnvironment-skip stmt) 0)
-          (format "MACHINE.env.length = MACHINE.env.length - ~a;"
-                  (PopEnvironment-n stmt))
-          (format "MACHINE.env.splice(MACHINE.env.length-(~a),~a);"
-                  (+ (PopEnvironment-skip stmt)
-                     (PopEnvironment-n stmt))
-                  (PopEnvironment-n stmt)))])))
 
+     [(PushEnvironment? stmt)
+      (if (= (PushEnvironment-n stmt) 0)
+          ""
+          (format "MACHINE.env.push(~a);" (string-join
+                                           (build-list (PushEnvironment-n stmt) 
+                                                       (lambda: ([i : Natural])
+                                                                (if (PushEnvironment-unbox? stmt)
+                                                                    "[undefined]"
+                                                                    "undefined")))
+                                           ", ")))]
+     [(PopEnvironment? stmt)
+      (let ([skip (PopEnvironment-skip stmt)])
+        (cond
+          [(and (Const? skip) (= (ensure-natural (Const-const skip)) 0))
+           (format "MACHINE.env.length = MACHINE.env.length - ~a;"
+                   (assemble-oparg (PopEnvironment-n stmt)))]
+          [else
+           (format "MACHINE.env.splice(MACHINE.env.length - (~a + ~a), ~a);"
+                   (assemble-oparg (PopEnvironment-skip stmt))
+                   (assemble-oparg (PopEnvironment-n stmt))
+                   (assemble-oparg (PopEnvironment-n stmt)))]))]
+     
+     [(PushImmediateOntoEnvironment? stmt)
+      (format "MACHINE.env.push(~a);"
+              (let: ([val-string : String
+                                 (cond [(PushImmediateOntoEnvironment-box? stmt)
+                                        (format "[~a]" (assemble-oparg (PushImmediateOntoEnvironment-value stmt)))]
+                                       [else
+                                        (assemble-oparg (PushImmediateOntoEnvironment-value stmt))])])
+                    val-string))])))
+
+
+(: ensure-natural (Any -> Natural))
+(define (ensure-natural x)
+  (if (natural? x)
+      x
+      (error 'ensure-natural)))
 
 
 (: assemble-jump ((U Label Reg) -> String))
@@ -332,9 +432,9 @@ EOF
      "MACHINE.proc.label"]
     
     [(MakeCompiledProcedure? op)
-     (format "new Closure(~a, ~a, [~a], ~a)"
+     (format "new RUNTIME.Closure(~a, ~a, [~a], ~a)"
              (MakeCompiledProcedure-label op)
-             (MakeCompiledProcedure-arity op)
+             (assemble-arity (MakeCompiledProcedure-arity op))
              (string-join (map assemble-env-reference/closure-capture 
                                ;; The closure values are in reverse order
                                ;; to make it easier to push, in bulk, into
@@ -345,24 +445,26 @@ EOF
              (assemble-display-name (MakeCompiledProcedure-display-name op)))]
     
     [(MakeCompiledProcedureShell? op)
-     (format "new Closure(~a, ~a, undefined, ~a)"
+     (format "new RUNTIME.Closure(~a, ~a, undefined, ~a)"
              (MakeCompiledProcedureShell-label op)
-             (MakeCompiledProcedureShell-arity op)
+             (assemble-arity (MakeCompiledProcedureShell-arity op))
              (assemble-display-name (MakeCompiledProcedureShell-display-name op)))]
     
     [(ApplyPrimitiveProcedure? op)
-     (format "MACHINE.proc(MACHINE, ~a)"
-             (ApplyPrimitiveProcedure-arity op))]
+     (format "MACHINE.proc(MACHINE, MACHINE.argcount)")]
     
     [(GetControlStackLabel? op)
      (format "MACHINE.control[MACHINE.control.length-1].label")]
-    
+
+    [(GetControlStackLabel/MultipleValueReturn? op)
+     (format "MACHINE.control[MACHINE.control.length-1].label.multipleValueReturn")]
+  
     [(CaptureEnvironment? op)
      (format "MACHINE.env.slice(0, MACHINE.env.length - ~a)"
              (CaptureEnvironment-skip op))]
     
     [(CaptureControl? op)
-     (format "captureControl(MACHINE, ~a, ~a)"
+     (format "RUNTIME.captureControl(MACHINE, ~a, ~a)"
              (CaptureControl-skip op)
              (let ([tag (CaptureControl-tag op)])
                (cond [(DefaultContinuationPromptTag? tag)
@@ -379,9 +481,31 @@ EOF
      (open-code-kernel-primitive-procedure op)]))
 
 
+(define-predicate natural? Natural)
+
+(: assemble-arity (Arity -> String))
+(define (assemble-arity an-arity)
+  (cond
+    [(natural? an-arity)
+     (format "~a" an-arity)]
+    [(ArityAtLeast? an-arity)
+     (format "(new RUNTIME.ArityAtLeast(~a))" (ArityAtLeast-value an-arity))]
+    [(listof-atomic-arity? an-arity)
+     (assemble-listof-assembled-values
+      (map (lambda: ([atomic-arity : (U Natural ArityAtLeast)])
+                    (cond
+                      [(natural? atomic-arity)
+                       (format "~a" an-arity)]
+                      [(ArityAtLeast? an-arity)
+                       (format "(new RUNTIME.ArityAtLeast(~a))" (ArityAtLeast-value an-arity))]
+                      ;; Can't seem to make the type checker happy without this...
+                      [else (error 'assemble-arity)]))
+           an-arity))]))
+
+
 (: assemble-default-continuation-prompt-tag (-> String))
 (define (assemble-default-continuation-prompt-tag)
-  "DEFAULT_CONTINUATION_PROMPT_TAG")
+  "RUNTIME.DEFAULT_CONTINUATION_PROMPT_TAG")
 
 
 
@@ -399,21 +523,26 @@ EOF
              (CheckToplevelBound!-pos op))]
     
     [(CheckClosureArity!? op)
-     (format "if (! (MACHINE.proc instanceof Closure && MACHINE.proc.arity === ~a)) { if (! (MACHINE.proc instanceof Closure)) { throw new Error(\"not a closure\"); } else { throw new Error(\"arity failure\"); } }"
-             (CheckClosureArity!-arity op))]
+     (format "if (! (MACHINE.proc instanceof RUNTIME.Closure && RUNTIME.isArityMatching(MACHINE.proc.arity, ~a))) { if (! (MACHINE.proc instanceof RUNTIME.Closure)) { throw new Error(\"not a closure\"); } else { throw new Error(\"arity failure:\" + MACHINE.proc.displayName); } }"
+             (assemble-oparg (CheckClosureArity!-arity op)))]
+    
+    [(CheckPrimitiveArity!? op)
+     (format "if (! (typeof(MACHINE.proc) === 'function'  && RUNTIME.isArityMatching(MACHINE.proc.arity, ~a))) { if (! (typeof(MACHINE.proc) === 'function')) { throw new Error(\"not a primitive procedure\"); } else { throw new Error(\"arity failure:\" + MACHINE.proc.displayName); } }"
+             (assemble-oparg (CheckPrimitiveArity!-arity op)))]
+     
     
     [(ExtendEnvironment/Prefix!? op)
      (let: ([names : (Listof (U Symbol False ModuleVariable)) (ExtendEnvironment/Prefix!-names op)])
            (format "MACHINE.env.push([~a]);  MACHINE.env[MACHINE.env.length-1].names = [~a];"
                    (string-join (map (lambda: ([n : (U Symbol False ModuleVariable)])
                                               (cond [(symbol? n)
-                                                     (format "MACHINE.params.currentNamespace[~s] || Primitives[~s]"
+                                                     (format "MACHINE.params.currentNamespace[~s] || MACHINE.primitives[~s]"
                                                              (symbol->string n) 
                                                              (symbol->string n))]
                                                     [(eq? n #f)
                                                      "false"]
                                                     [(ModuleVariable? n)
-                                                     (format "Primitives[~s]"
+                                                     (format "MACHINE.primitives[~s]"
                                                              (symbol->string (ModuleVariable-name n)))]))
                                      names)
                                 ",")
@@ -433,7 +562,7 @@ EOF
     [(RestoreEnvironment!? op)
      "MACHINE.env = MACHINE.env[MACHINE.env.length - 2].slice(0);"]
     [(RestoreControl!? op)
-     (format "restoreControl(MACHINE, ~a);"
+     (format "RUNTIME.restoreControl(MACHINE, ~a);"
              (let ([tag (RestoreControl!-tag op)])
                (cond
                  [(DefaultContinuationPromptTag? tag)
@@ -449,7 +578,17 @@ EOF
                                ;; the environment (which is also in reversed order)
                                ;; during install-closure-values.
                                (reverse (FixClosureShellMap!-closed-vals op)))
-                          ", "))]))
+                          ", "))]
+    [(SetFrameCallee!? op)
+     (format "MACHINE.control[MACHINE.control.length-1].proc = ~a;"
+             (assemble-oparg (SetFrameCallee!-proc op)))]
+    [(SpliceListIntoStack!? op)
+     (format "RUNTIME.spliceListIntoStack(MACHINE, ~a);"
+             (assemble-oparg (SpliceListIntoStack!-depth op)))]
+    [(UnspliceRestFromStack!? op)
+     (format "RUNTIME.unspliceRestFromStack(MACHINE, ~a, ~a);"
+             (assemble-oparg (UnspliceRestFromStack!-depth op))
+             (assemble-oparg (UnspliceRestFromStack!-length op)))]))
 
 
 

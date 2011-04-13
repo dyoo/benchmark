@@ -21,7 +21,7 @@
 (require/typed "simulator-helpers.rkt"
                [ensure-primitive-value-box (SlotValue -> (Boxof PrimitiveValue))]
                [ensure-primitive-value (SlotValue -> PrimitiveValue)]
-               [ensure-list (Any -> PrimitiveValue)]
+               [ensure-list (Any -> (U Null MutablePair))]
                [racket->PrimitiveValue (Any -> PrimitiveValue)])
              
 
@@ -50,6 +50,7 @@
                                   program-text])])
             (let: ([m : machine (make-machine (make-undefined)
                                               (make-undefined)
+                                              (make-undefined)
                                               '() 
                                               '()
                                               0 
@@ -61,6 +62,8 @@
                           (let: ([stmt : Statement (vector-ref (machine-text m) i)])
                                 (when (symbol? stmt)
                                   (hash-set! (machine-jump-table m) stmt i))
+                                (when (LinkedLabel? stmt)
+                                  (hash-set! (machine-jump-table m) (LinkedLabel-label stmt) i))
                                 (loop (add1 i)))))
                   m))]))
 
@@ -88,6 +91,8 @@
                   (cond
                     [(symbol? i)
                      'ok]
+                    [(LinkedLabel? i)
+                     'ok]
                     [(AssignImmediateStatement? i)
                      (step-assign-immediate! m i)]
                     [(AssignPrimOpStatement? i)
@@ -102,6 +107,8 @@
                      (step-pop-environment! m i)]
                     [(PushEnvironment? i)
                      (step-push-environment! m i)]
+                    [(PushImmediateOntoEnvironment? i)
+                     (step-push-immediate-onto-environment! m i)]
                     [(PushControlFrame? i)
                      (step-push-control-frame! m i)]
                     [(PushControlFrame/Prompt? i)
@@ -126,7 +133,9 @@
                             (cond [(eq? reg 'val)
                                    (jump! m (ensure-symbol (machine-val m)))]
                                   [(eq? reg 'proc)
-                                   (jump! m (ensure-symbol (machine-proc m)))])]))])))
+                                   (jump! m (ensure-symbol (machine-proc m)))]
+                                  [(eq? reg 'argcount)
+                                   (error 'goto "argcount misused as jump source")])]))])))
 
 (: step-assign-immediate! (machine AssignImmediateStatement -> 'ok))
 (define (step-assign-immediate! m stmt)
@@ -149,8 +158,16 @@
 
 (: step-pop-environment! (machine PopEnvironment -> 'ok))
 (define (step-pop-environment! m stmt)
-  (env-pop! m (PopEnvironment-n stmt) (PopEnvironment-skip stmt)))
+  (env-pop! m 
+            (ensure-natural (evaluate-oparg m (PopEnvironment-n stmt)))
+            (ensure-natural (evaluate-oparg m (PopEnvironment-skip stmt)))))
 
+(: step-push-immediate-onto-environment! (machine PushImmediateOntoEnvironment -> 'ok))
+(define (step-push-immediate-onto-environment! m stmt)
+  (let ([t (make-EnvLexicalReference 0 (PushImmediateOntoEnvironment-box? stmt))]
+        [v (evaluate-oparg m (PushImmediateOntoEnvironment-value stmt))])
+    (step-push-environment! m (make-PushEnvironment 1 (PushImmediateOntoEnvironment-box? stmt)))
+    ((get-target-updater t) m v)))
 
 (: step-push-control-frame! (machine PushControlFrame -> 'ok))
 (define (step-push-control-frame! m stmt)
@@ -166,7 +183,8 @@
                          default-continuation-prompt-tag-value]
                         [(OpArg? tag)
                          (ensure-continuation-prompt-tag-value (evaluate-oparg m tag))]))
-                    (PushControlFrame/Prompt-label stmt))))
+                    (PushControlFrame/Prompt-label stmt)
+                    (length (machine-env m)))))
                         
   
 
@@ -179,11 +197,14 @@
 (define (step-test-and-branch! m stmt)
   (let: ([test : PrimitiveTest (TestAndBranchStatement-op stmt)]
          [argval : SlotValue (lookup-atomic-register m (TestAndBranchStatement-register stmt))])
-        (if (cond
-              [(eq? test 'false?)
-               (not argval)]
-              [(eq? test 'primitive-procedure?)
-               (primitive-proc? argval)])
+        (if (let: ([v : Boolean (cond
+                                  [(eq? test 'false?)
+                                   (not argval)]
+                                  [(eq? test 'one?)
+                                   (= (ensure-natural argval) 1)]
+                                  [(eq? test 'primitive-procedure?)
+                                   (primitive-proc? argval)])])
+                  v)
             (jump! m (TestAndBranchStatement-label stmt))
             'ok)))
 
@@ -193,7 +214,9 @@
   (cond [(eq? reg 'val)
          (machine-val m)]
         [(eq? reg 'proc)
-         (machine-proc m)]))
+         (machine-proc m)]
+        [(eq? reg 'argcount)
+         (machine-argcount m)]))
 
 
 (: lookup-env-reference/closure-capture (machine EnvReference -> SlotValue))
@@ -225,14 +248,28 @@
            (let: ([clos : SlotValue (machine-proc m)])
                  (cond
                    [(closure? clos)
-                    (if (= (closure-arity clos)
-                           (CheckClosureArity!-arity op))
+                    (if (arity-match? (closure-arity clos)
+                                      (ensure-natural (evaluate-oparg m (CheckClosureArity!-arity op))))
                         'ok
                         (error 'check-closure-arity "arity mismatch: passed ~s args to ~s"
-                               (CheckClosureArity!-arity op)
+                               (ensure-natural (evaluate-oparg m (CheckClosureArity!-arity op)))
                                (closure-display-name clos)))]
                    [else
                     (error 'check-closure-arity "not a closure: ~s" clos)]))]
+
+          [(CheckPrimitiveArity!? op)
+           (let: ([clos : SlotValue (machine-proc m)])
+                 (cond
+                   [(primitive-proc? clos)
+                    (if (arity-match? (primitive-proc-arity clos)
+                                      (ensure-natural (evaluate-oparg m (CheckPrimitiveArity!-arity op))))
+                        'ok
+                        (error 'check-primitive-arity "arity mismatch: passed ~s args to ~s"
+                               (ensure-natural (evaluate-oparg m (CheckPrimitiveArity!-arity op)))
+                               (primitive-proc-display-name clos)))]
+                   [else
+                    (error 'check-primitive-arity "not a primitive: ~s" clos)]))]
+
           
           [(ExtendEnvironment/Prefix!? op)
            (env-push! m 
@@ -245,7 +282,7 @@
                                                          [(eq? name #f)
                                                           (make-undefined)]))
                                           (ExtendEnvironment/Prefix!-names op))))]
-          
+
           [(InstallClosureValues!? op)
            (let: ([a-proc : SlotValue (machine-proc m)])
                  (cond
@@ -261,6 +298,49 @@
                                     (map (lambda: ([d : Natural]) (env-ref m d))
                                          (FixClosureShellMap!-closed-vals op)))
                  'ok)]
+
+          
+          [(SetFrameCallee!? op)
+           (let* ([proc-value (ensure-closure (evaluate-oparg m (SetFrameCallee!-proc op)))]
+                  [frame (ensure-CallFrame (control-top m))])
+             (set-CallFrame-proc! frame proc-value)
+             'ok)]
+          
+          [(SpliceListIntoStack!? op)
+           (let*: ([stack-index : Natural (ensure-natural (evaluate-oparg m (SpliceListIntoStack!-depth op)))]
+                   [arg-list : (Listof PrimitiveValue) 
+                             (mutable-pair-list->list
+                              (ensure-list (env-ref m stack-index)))])
+                  (set-machine-env! m (append (take (machine-env m) stack-index)
+                                              arg-list
+                                              (drop (machine-env m) (add1 stack-index))))
+                  (set-machine-stack-size! m (ensure-natural (+ (machine-stack-size m)
+                                                                (length arg-list)
+                                                                -1)))
+                  (set-machine-argcount! m
+                                         (ensure-natural 
+                                          (+ (ensure-natural (machine-argcount m))
+                                             (length arg-list)
+                                             -1)))
+                  'ok)]
+          
+          [(UnspliceRestFromStack!? op)
+           (let: ([depth : Natural (ensure-natural
+                                    (evaluate-oparg m (UnspliceRestFromStack!-depth op)))]
+                  [len : Natural (ensure-natural
+                                  (evaluate-oparg m (UnspliceRestFromStack!-length op)))])
+                 (let ([rest-arg (list->mutable-pair-list (map ensure-primitive-value
+                                                               (take (drop (machine-env m) depth) len)))])
+                   (set-machine-env! m 
+                                     (append (take (machine-env m) depth)
+                                             (list rest-arg)
+                                             (drop (machine-env m) (+ depth len))))
+                   (set-machine-stack-size! m (ensure-natural 
+                                               (+ (machine-stack-size m)
+                                                  (add1 (- len)))))
+                   (set-machine-argcount! m (ensure-natural (+ (ensure-natural (machine-argcount m))
+                                                               (add1 (- len)))))
+                   'ok))]
           
           [(RestoreControl!? op)
            (let: ([tag-value : ContinuationPromptTagValue
@@ -283,6 +363,41 @@
 
 
 
+(: mutable-pair-list->list ((U Null MutablePair) -> (Listof PrimitiveValue)))
+(define (mutable-pair-list->list mlst)
+  (cond
+    [(null? mlst)
+     '()]
+    [else
+     (cons (MutablePair-h mlst)
+           (mutable-pair-list->list (let ([t (MutablePair-t mlst)])
+                                      (cond
+                                        [(null? t)
+                                         t]
+                                        [(MutablePair? t)
+                                         t]
+                                        [else
+                                         (error 'mutable-pair-list->list "Not a list: ~s" t)]))))]))
+
+
+(: arity-match? (Arity Natural -> Boolean))
+(define (arity-match? an-arity n)
+  (cond
+    [(natural? an-arity)
+     (= n an-arity)]
+    [(ArityAtLeast? an-arity)
+     (>= n (ArityAtLeast-value an-arity))]
+    [(list? an-arity)
+     (ormap (lambda: ([atomic-arity : (U Natural ArityAtLeast)])
+                     (cond [(natural? atomic-arity)
+                            (= n atomic-arity)]
+                           [(ArityAtLeast? atomic-arity)
+                            (>= n (ArityAtLeast-value atomic-arity))]))
+            an-arity)]))
+                     
+
+
+
 (: compose-continuation-frames ((Listof frame) (Listof frame) -> (Listof frame)))
 ;; Stitch together the continuation.  A PromptFrame must exist at the head of frames-2.
 (define (compose-continuation-frames frames-1 frames-2)
@@ -299,6 +414,8 @@
      proc-update!]
     [(eq? t 'val)
      val-update!]
+    [(eq? t 'argcount)
+     argcount-update!]
     [(EnvLexicalReference? t)
      (lambda: ([m : machine] [v : SlotValue])
               (if (EnvLexicalReference-unbox? t)
@@ -350,7 +467,7 @@
            (let: ([prim : SlotValue (machine-proc m)]
                   [args : (Listof PrimitiveValue)
                         (map ensure-primitive-value (take (machine-env m)
-                                                          (ApplyPrimitiveProcedure-arity op)))])
+                                                          (ensure-natural (machine-argcount m))))])
                  (cond
                    [(primitive-proc? prim)
                     (target-updater! m (ensure-primitive-value 
@@ -366,10 +483,38 @@
            (target-updater! m (let ([frame (ensure-frame (first (machine-control m)))])
                                 (cond
                                   [(PromptFrame? frame)
-                                   (PromptFrame-return frame)]
+                                   (let ([label (PromptFrame-return frame)])
+                                     (cond
+                                       [(symbol? label)
+                                        label]
+                                       [(LinkedLabel? label)
+                                        (LinkedLabel-label label)]))]
                                   [(CallFrame? frame)
-                                   (CallFrame-return frame)])))]
-
+                                   (let ([label (CallFrame-return frame)])
+                                     (cond
+                                       [(symbol? label)
+                                        label]
+                                       [(LinkedLabel? label)
+                                        (LinkedLabel-label label)]))])))]
+          
+          [(GetControlStackLabel/MultipleValueReturn? op)
+           (target-updater! m (let ([frame (ensure-frame (first (machine-control m)))])
+                                (cond
+                                  [(PromptFrame? frame)
+                                   (let ([label (PromptFrame-return frame)])
+                                     (cond
+                                       [(symbol? label) 
+                                        (error 'GetControlStackLabel/MultipleValueReturn)]
+                                       [(LinkedLabel? label)
+                                        (LinkedLabel-linked-to label)]))]
+                                  [(CallFrame? frame)
+                                   (let ([label (CallFrame-return frame)])
+                                     (cond
+                                       [(symbol? label) 
+                                        (error 'GetControlStackLabel/MultipleValueReturn)]
+                                       [(LinkedLabel? label)
+                                        (LinkedLabel-linked-to label)]))])))]
+          
           [(CaptureEnvironment? op)
            (target-updater! m (make-CapturedEnvironment (drop (machine-env m)
                                                               (CaptureEnvironment-skip op))))]
@@ -435,7 +580,14 @@
              (drop-continuation-to-tag (rest frames) tag)])]))]))
 
 
-
+(: list->mutable-pair-list ((Listof PrimitiveValue) -> PrimitiveValue))
+(define (list->mutable-pair-list rand-vals)
+  (let: loop : PrimitiveValue ([rand-vals : (Listof PrimitiveValue) rand-vals])
+             (cond [(empty? rand-vals)
+                    null]
+                   [else
+                    (make-MutablePair (first rand-vals)
+                                      (loop (rest rand-vals)))])))
 
 
 
@@ -476,12 +628,7 @@
           [(cdr)
            (MutablePair-t (ensure-mutable-pair (first rand-vals)))]
           [(list)
-           (let: loop : PrimitiveValue ([rand-vals : (Listof PrimitiveValue) rand-vals])
-             (cond [(empty? rand-vals)
-                    null]
-                   [else
-                    (make-MutablePair (first rand-vals)
-                                      (loop (rest rand-vals)))]))]
+           (list->mutable-pair-list rand-vals)]
           [(null?)
            (null? (first rand-vals))]
           [(not)
@@ -522,7 +669,9 @@
              [(eq? n 'proc)
               (machine-proc m)]
              [(eq? n 'val)
-              (machine-val m)]))]
+              (machine-val m)]
+             [(eq? n 'argcount)
+              (machine-argcount m)]))]
     
     [(EnvLexicalReference? an-oparg)
      (let*: ([v : SlotValue
@@ -557,7 +706,11 @@
              [else
               (error 'evaluate-oparg "Internal error: not a toplevel at depth ~s: ~s"
                      (EnvWholePrefixReference-depth an-oparg)
-                     v)]))]))
+                     v)]))]
+
+    [(SubtractArg? an-oparg)
+     (- (ensure-number (evaluate-oparg m (SubtractArg-lhs an-oparg)))
+        (ensure-number (evaluate-oparg m (SubtractArg-rhs an-oparg))))]))
 
 
 (: ensure-closure-or-false (SlotValue -> (U closure #f)))
@@ -603,9 +756,11 @@
     [else
      (error 'ensure-toplevel)]))
 
-(: ensure-natural (Integer -> Natural))
+(define-predicate natural? Natural)
+
+(: ensure-natural (Any -> Natural))
 (define (ensure-natural x)
-  (if (>= x 0)
+  (if (natural? x)
       x
       (error 'ensure-natural)))
 
@@ -662,7 +817,7 @@
 (: current-instruction (machine -> Statement))
 (define (current-instruction m)
   (match m
-    [(struct machine (val proc env control pc text
+    [(struct machine (val proc argcount env control pc text
                           stack-size jump-table))
      (vector-ref text pc)]))
 
@@ -673,6 +828,10 @@
   (set-machine-val! m v)
   'ok)
 
+(: argcount-update! (machine SlotValue -> 'ok))
+(define (argcount-update! m v)
+  (set-machine-argcount! m v)
+  'ok)
 
 (: proc-update! (machine SlotValue -> 'ok))
 (define (proc-update! m v)
@@ -683,7 +842,7 @@
 (: env-push! (machine SlotValue -> 'ok))
 (define (env-push! m v)
   (match m
-    [(struct machine (val proc env control pc text stack-size jump-table))
+    [(struct machine (val proc argcount env control pc text stack-size jump-table))
      (set-machine-env! m (cons v env))
      (set-machine-stack-size! m (add1 stack-size))
      'ok]))
@@ -691,7 +850,7 @@
 (: env-push-many! (machine (Listof SlotValue) -> 'ok))
 (define (env-push-many! m vs)
   (match m
-    [(struct machine (val proc env control pc text stack-size jump-table))
+    [(struct machine (val proc argcount env control pc text stack-size jump-table))
      (set-machine-env! m (append vs env))
      (set-machine-stack-size! m (+ stack-size (length vs)))
      'ok]))
@@ -700,13 +859,13 @@
 (: env-ref (machine Natural -> SlotValue))
 (define (env-ref m i)  
   (match m
-    [(struct machine (val proc env control pc text stack-size jump-table))
+    [(struct machine (val proc argcount env control pc text stack-size jump-table))
      (list-ref env i)]))
 
 (: env-mutate! (machine Natural SlotValue -> 'ok))
 (define (env-mutate! m i v)
   (match m
-    [(struct machine (val proc env control pc text stack-size jump-table))
+    [(struct machine (val proc argcount env control pc text stack-size jump-table))
      (set-machine-env! m (list-replace env i v))
      'ok]))
 
@@ -724,7 +883,7 @@
 (: env-pop! (machine Natural Natural -> 'ok))
 (define (env-pop! m n skip)     
   (match m
-    [(struct machine (val proc env control pc text stack-size jump-table))
+    [(struct machine (val proc argcount env control pc text stack-size jump-table))
      (set-machine-env! m (append (take env skip)
                                  (drop env (+ skip n))))
      (set-machine-stack-size! m (ensure-natural (- stack-size n)))
@@ -734,7 +893,7 @@
 (: control-push! (machine frame -> 'ok))
 (define (control-push! m a-frame)
   (match m
-    [(struct machine (val proc env control pc text stack-size jump-table))
+    [(struct machine (val proc argcount env control pc text stack-size jump-table))
      (set-machine-control! m (cons a-frame control))
      'ok]))
 
@@ -742,9 +901,15 @@
 (: control-pop! (machine -> 'ok))
 (define (control-pop! m)
   (match m
-    [(struct machine (val proc env control pc text stack-size jump-table))
+    [(struct machine (val proc argcount env control pc text stack-size jump-table))
      (set-machine-control! m (rest control))
      'ok]))
+
+(: control-top (machine -> frame))
+(define (control-top m)
+  (match m
+    [(struct machine (val proc argcount env control pc text stack-size jump-table))
+     (first control)]))
 
 
 
@@ -759,7 +924,7 @@
 ;; Jumps directly to the instruction at the given label.
 (define (jump! m l)
   (match m
-    [(struct machine (val proc env control pc text stack-size jump-table))
+    [(struct machine (val proc argcount env control pc text stack-size jump-table))
      (set-machine-pc! m (hash-ref jump-table l))
      'ok]))
 

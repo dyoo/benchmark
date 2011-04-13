@@ -12,7 +12,7 @@
          assemble-whole-prefix-reference
          assemble-reg
          assemble-label
-         assemble-input)
+         assemble-listof-assembled-values)
 
 
 (: assemble-oparg (OpArg -> String))
@@ -29,7 +29,9 @@
     [(EnvPrefixReference? v)
      (assemble-prefix-reference v)]
     [(EnvWholePrefixReference? v)
-     (assemble-whole-prefix-reference v)]))
+     (assemble-whole-prefix-reference v)]
+    [(SubtractArg? v)
+     (assemble-subtractarg v)]))
 
 
 
@@ -41,12 +43,14 @@
      "MACHINE.proc"]
     [(eq? target 'val)
      "MACHINE.val"]
+    [(eq? target 'argcount)
+     "MACHINE.argcount"]
     [(EnvLexicalReference? target)
      (assemble-lexical-reference target)]
     [(EnvPrefixReference? target)
      (assemble-prefix-reference target)]
     [(PrimitivesReference? target)
-     (format "Primitives[~s]" (symbol->string (PrimitivesReference-name target)))]))
+     (format "MACHINE.primitives[~s]" (symbol->string (PrimitivesReference-name target)))]))
 
 
 
@@ -65,11 +69,20 @@
               [(void? val)
                "null"]
               [(empty? val)
-               (format "Primitives.null")]
+               (format "RUNTIME.NULL")]
               [(number? val)
                (format "(~s)" val)]
               [else
                (format "~s" val)])))
+
+(: assemble-listof-assembled-values ((Listof String) -> String))
+(define (assemble-listof-assembled-values vals)
+  (let loop ([vals vals])
+    (cond
+      [(empty? vals)
+       "RUNTIME.NULL"]
+      [else
+       (format "[~a, ~a]" (first vals) (loop (rest vals)))])))
 
 
 
@@ -104,20 +117,8 @@
 (define (assemble-label a-label)
   (symbol->string (Label-name a-label)))
 
-
-
-(: assemble-input (OpArg -> String))
-(define (assemble-input an-input)
-  (cond
-    [(Reg? an-input)
-     (assemble-reg an-input)]
-    [(Const? an-input)
-     (assemble-const an-input)]
-    [(Label? an-input)
-     (assemble-label an-input)]
-    [(EnvLexicalReference? an-input)
-     (assemble-lexical-reference an-input)]
-    [(EnvPrefixReference? an-input)
-     (assemble-prefix-reference an-input)]
-    [(EnvWholePrefixReference? an-input)
-     (assemble-whole-prefix-reference an-input)]))
+(: assemble-subtractarg (SubtractArg -> String))
+(define (assemble-subtractarg s)
+  (format "(~a - ~a)"
+          (assemble-oparg (SubtractArg-lhs s))
+          (assemble-oparg (SubtractArg-rhs s))))

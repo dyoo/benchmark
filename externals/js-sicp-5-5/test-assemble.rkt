@@ -41,8 +41,9 @@
                             [code
                              (string-append
                               "(function() { "
-                              
+
                               runtime
+                              "var MACHINE = new plt.runtime.Machine();\n"
 
                               "return function(success, fail, params){" 
 			      snippet
@@ -58,11 +59,10 @@
                         (lambda (a-statement+inspector op)
                           (let* ([a-statement (car a-statement+inspector)]
                                  [inspector (cdr a-statement+inspector)])
-                            
-                            (display "(function() { " op)
-                            
+
                             (display runtime op)
-                            
+                            (display "var MACHINE = new plt.runtime.Machine();\n" op)                           
+                            (display "(function() { " op)
                             (display "var myInvoke = " op)
                             (assemble/write-invoke a-statement op)
                             (display ";" op)
@@ -114,7 +114,8 @@
               "MACHINE.env.length")
       "2")
 (test (E-many (list (make-PushEnvironment 2 #f)
-                    (make-PopEnvironment 1 0))
+                    (make-PopEnvironment (make-Const 1) 
+                                         (make-Const 0)))
               "MACHINE.env.length")
       "1")
 
@@ -153,8 +154,8 @@
                                                    (make-Const 3))
                     (make-AssignImmediateStatement (make-EnvLexicalReference 1 #f)
                                                    (make-Const 4))
-                    (make-AssignPrimOpStatement 'val
-                                                (make-ApplyPrimitiveProcedure 2))
+                    (make-AssignImmediateStatement 'argcount (make-Const 2))
+                    (make-AssignPrimOpStatement 'val (make-ApplyPrimitiveProcedure))
                     'done))
       "7")
 
@@ -203,7 +204,8 @@
                     (make-AssignPrimOpStatement 'proc (make-MakeCompiledProcedure 'closureStart 0 
                                                                                  (list 0 1)
                                                                                  'closureStart))
-                    (make-PopEnvironment 2 0)
+                    (make-PopEnvironment (make-Const 2) 
+                                         (make-Const 0))
                     (make-GotoStatement (make-Label 'closureStart))
                     'theEnd)
               "String(MACHINE.env.length) + ',' + MACHINE.env[1] + ',' + MACHINE.env[0]")
@@ -227,7 +229,7 @@
                     (make-AssignPrimOpStatement 'proc (make-MakeCompiledProcedure 'closureStart 0 
                                                                                  (list 0 1)
                                                                                  'closureStart))
-                    (make-PopEnvironment 2 0)
+                    (make-PopEnvironment (make-Const 2) (make-Const 0))
                     (make-AssignPrimOpStatement 'val (make-GetCompiledProcedureEntry)))
               "typeof(MACHINE.val) + ',' + (MACHINE.val === MACHINE.proc.label)")
       "function,true")
@@ -249,8 +251,8 @@
                     (make-AssignPrimOpStatement 'proc (make-MakeCompiledProcedure 'closureStart 5 
                                                                                   (list 0 1)
                                                                                   'closureStart))
-                    (make-PopEnvironment 2 0)
-                    (make-PerformStatement (make-CheckClosureArity! 5)))))
+                    (make-PopEnvironment (make-Const 2) (make-Const 0))
+                    (make-PerformStatement (make-CheckClosureArity! (make-Const 5))))))
 
 ;; this should fail, since the check is for 1, but the closure expects 5.
 (let/ec return
@@ -271,8 +273,8 @@
                   (make-AssignPrimOpStatement 'proc (make-MakeCompiledProcedure 'closureStart 5 
                                                                                 (list 0 1)
                                                                                 'closureStart))
-                  (make-PopEnvironment 2 0)
-                  (make-PerformStatement (make-CheckClosureArity! 1)))))
+                  (make-PopEnvironment (make-Const 2) (make-Const 0))
+                  (make-PerformStatement (make-CheckClosureArity! (make-Const 1))))))
   (error 'expected-failure))
 
 
@@ -366,3 +368,60 @@
                 ,(make-PerformStatement (make-CheckToplevelBound! 0 0)))
               "MACHINE.env[0][0]")
       "Shriram")
+
+
+
+(test (E-many `(,(make-PushEnvironment 1 #f)
+                ,(make-AssignImmediateStatement (make-EnvLexicalReference 0 #f)
+                                                (make-Const '(1 2 3)))
+                ,(make-AssignImmediateStatement 'argcount (make-Const 1))
+                ,(make-PerformStatement (make-SpliceListIntoStack! (make-Const 0))))
+              "MACHINE.argcount + ',' + MACHINE.env[0] + ',' + MACHINE.env[1] + ',' + MACHINE.env[2]")
+      "3,3,2,1")
+
+
+(test (E-many `(,(make-PushEnvironment 3 #f)
+                ,(make-AssignImmediateStatement (make-EnvLexicalReference 0 #f)
+                                                (make-Const "hello"))
+                ,(make-AssignImmediateStatement (make-EnvLexicalReference 1 #f)
+                                                (make-Const "world"))
+                ,(make-AssignImmediateStatement (make-EnvLexicalReference 2 #f)
+                                                (make-Const '(1 2 3)))
+                ,(make-AssignImmediateStatement 'argcount (make-Const 3))
+                ,(make-PerformStatement (make-SpliceListIntoStack! (make-Const 2))))
+              "MACHINE.argcount + ',' + MACHINE.env[0] + ',' + MACHINE.env[1] + ',' + MACHINE.env[2] + ',' + MACHINE.env[3] + ',' + MACHINE.env[4]")
+      "5,3,2,1,world,hello")
+
+
+
+
+
+
+
+;; testing rest splicing
+(test (E-many `(,(make-PushEnvironment 1 #f)
+                ,(make-AssignImmediateStatement (make-EnvLexicalReference 0 #f)
+                                                (make-Const "hello"))
+                ,(make-AssignImmediateStatement 'argcount (make-Const 1))
+                ,(make-PerformStatement (make-UnspliceRestFromStack! (make-Const 0)
+                                                                     (make-Const 1))))
+              "MACHINE.argcount + ',' + plt.runtime.isList(MACHINE.env[0])")
+      "1,true")
+
+
+(test (E-many
+       `(,(make-PushEnvironment 5 #f)
+         ,(make-AssignImmediateStatement (make-EnvLexicalReference 0 #f)
+                                         (make-Const "hello"))
+         ,(make-AssignImmediateStatement (make-EnvLexicalReference 1 #f)
+                                         (make-Const "world"))
+         ,(make-AssignImmediateStatement (make-EnvLexicalReference 2 #f)
+                                         (make-Const 'x))
+         ,(make-AssignImmediateStatement (make-EnvLexicalReference 3 #f)
+                                         (make-Const 'y))
+         ,(make-AssignImmediateStatement (make-EnvLexicalReference 4 #f)
+                                         (make-Const 'z))
+         ,(make-AssignImmediateStatement 'argcount (make-Const 5))
+         ,(make-PerformStatement (make-UnspliceRestFromStack! (make-Const 2)  (make-Const 3))))
+       "MACHINE.argcount + ',' + MACHINE.env.length + ',' + plt.runtime.isList(MACHINE.env[0]) + ',' + MACHINE.env[2] + ',' + MACHINE.env[1]")
+      "3,3,true,hello,world")

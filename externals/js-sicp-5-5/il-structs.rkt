@@ -11,7 +11,7 @@
 ;; Registers of the machine:
 
 (define-type StackRegisterSymbol (U 'control 'env))
-(define-type AtomicRegisterSymbol (U 'val 'proc))
+(define-type AtomicRegisterSymbol (U 'val 'proc 'argcount))
 (define-type RegisterSymbol (U StackRegisterSymbol AtomicRegisterSymbol))
 
 (define-predicate AtomicRegisterSymbol? AtomicRegisterSymbol)
@@ -26,6 +26,7 @@
                       EnvLexicalReference ;; a reference into the stack
                       EnvPrefixReference  ;; a reference into an element in the toplevel.
                       EnvWholePrefixReference ;; a reference into a toplevel prefix in the stack.
+                      SubtractArg
                       ))
 
 
@@ -42,6 +43,11 @@
 (define-struct: Reg ([name : AtomicRegisterSymbol])
   #:transparent)
 (define-struct: Const ([const : Any])
+  #:transparent)
+
+;; Limited arithmetic on OpArgs
+(define-struct: SubtractArg ([lhs : OpArg]
+                             [rhs : OpArg])
   #:transparent)
 
 
@@ -65,6 +71,9 @@
                                  
                                  PopEnvironment
                                  PushEnvironment
+                                 
+                                 PushImmediateOntoEnvironment
+                                 
                                  PushControlFrame
                                  PushControlFrame/Prompt
 
@@ -72,8 +81,15 @@
                                  PopControlFrame/Prompt))
 
 (define-type Statement (U UnlabeledStatement
-                          Symbol  ;; label
+                          Symbol      ;; label
+                          LinkedLabel ;; Label with a reference to a multiple-return-value label
                           ))
+
+
+(define-struct: LinkedLabel ([label : Symbol]
+                             [linked-to : Symbol])
+  #:transparent)
+
 
 (define-struct: AssignImmediateStatement ([target : Target]
                                           [value : OpArg])
@@ -84,11 +100,17 @@
 
 
 ;; Pop n slots from the environment, skipping past a few first.
-(define-struct: PopEnvironment ([n : Natural]
-                                [skip : Natural])
+(define-struct: PopEnvironment ([n : OpArg]
+                                [skip : OpArg])
   #:transparent)
 (define-struct: PushEnvironment ([n : Natural]
                                  [unbox? : Boolean])
+  #:transparent)
+
+
+;; Evaluate the value, and then push it onto the top of the environment.
+(define-struct: PushImmediateOntoEnvironment ([value : OpArg]
+                                              [box? : Boolean])
   #:transparent)
 
 
@@ -100,11 +122,11 @@
 ;; Adding a frame for getting back after procedure application.
 ;; The 'proc register must hold either #f or a closure at the time of
 ;; this call, as the control frame will hold onto the called procedure record.
-(define-struct: PushControlFrame ([label : Symbol]) 
+(define-struct: PushControlFrame ([label : (U Symbol LinkedLabel)]) 
   #:transparent)
 
 (define-struct: PushControlFrame/Prompt ([tag : (U OpArg DefaultContinuationPromptTag)]
-                                         [label : Symbol]
+                                         [label : (U Symbol LinkedLabel)]
                                          ;; TODO: add handler and arguments
                                          )
   #:transparent)
@@ -140,7 +162,11 @@
                                   MakeCompiledProcedureShell
                                   ApplyPrimitiveProcedure
 
+                                  ;; Gets at the single-value-return address.
                                   GetControlStackLabel
+                                  ;; Gets at the multiple-value-return address.
+                                  GetControlStackLabel/MultipleValueReturn
+                                  
                                   MakeBoxedEnvironmentValue
 
                                   CaptureEnvironment
@@ -156,7 +182,7 @@
 ;; and the set of lexical references into the environment that the
 ;; closure needs to close over.
 (define-struct: MakeCompiledProcedure ([label : Symbol]
-                                       [arity : Natural]
+                                       [arity : Arity]
                                        [closed-vals : (Listof Natural)]
                                        [display-name : (U Symbol False)])
   #:transparent)
@@ -164,15 +190,15 @@
 ;; Constructs a closure shell.  Like MakeCompiledProcedure, but doesn't
 ;; bother with trying to capture the free variables.
 (define-struct: MakeCompiledProcedureShell ([label : Symbol]
-                                            [arity : Natural]
+                                            [arity : Arity]
                                             [display-name : (U Symbol False)])
   #:transparent)
 
 
 ;; Applies the primitive procedure that's stored in the proc register, using
-;; the arity number of values that are bound in the environment as arguments
+;; the argcount number of values that are bound in the environment as arguments
 ;; to that primitive.
-(define-struct: ApplyPrimitiveProcedure ([arity : Natural])
+(define-struct: ApplyPrimitiveProcedure ()
   #:transparent)
 
 
@@ -194,13 +220,17 @@
 ;; Gets the return address embedded at the top of the control stack.
 (define-struct: GetControlStackLabel ()
   #:transparent)
+(define-struct: GetControlStackLabel/MultipleValueReturn ()
+  #:transparent)
+
 
 (define-struct: MakeBoxedEnvironmentValue ([depth : Natural])
   #:transparent)
 
 
 ;; Capture the current environment, skipping skip frames.
-(define-struct: CaptureEnvironment ([skip : Natural]))
+(define-struct: CaptureEnvironment ([skip : Natural]
+                                    [tag : (U DefaultContinuationPromptTag OpArg)]))
 
 ;; Capture the control stack, skipping skip frames.
 (define-struct: CaptureControl ([skip : Natural]
@@ -215,6 +245,8 @@
                             ;; register -> boolean
                             ;; Meant to branch when the register value is false.
                             'false?
+
+                            'one?
                             
                             ;; register -> boolean
                             ;; Meant to branch when the register value is a primitive
@@ -230,9 +262,14 @@
                                      [pos : Natural])
   #:transparent)
 
-;; Check the closure procedure value in 'proc and make sure it can accept n values.
-(define-struct: CheckClosureArity! ([arity : Natural])
+;; Check the closure procedure value in 'proc and make sure it can accept the
+;; # of arguments (stored as a number in the val register.).
+(define-struct: CheckClosureArity! ([arity : OpArg])
   #:transparent)
+(define-struct: CheckPrimitiveArity! ([arity : OpArg])
+  #:transparent)
+
+
 
 ;; Extends the environment with a prefix that holds
 ;; lookups to the namespace.
@@ -243,6 +280,23 @@
 ;; closure (held in the proc register) into itself.
 (define-struct: InstallClosureValues! ()
   #:transparent)
+
+
+(define-struct: SetFrameCallee! ([proc : OpArg])
+  #:transparent)
+
+
+;; Splices the list structure that lives in env[depth] into position.
+;; Depth must evaluate to a natural.
+(define-struct: SpliceListIntoStack! ([depth : OpArg])
+  #:transparent)
+
+;; Unsplices the length arguments on the stack, replacing with a list of that length.
+;; Side effects: touches both the environment and argcount appropriately. 
+(define-struct: UnspliceRestFromStack! ([depth : OpArg]
+                                        [length : OpArg])
+  #:transparent)
+
 
 (define-struct: FixClosureShellMap! (;; depth: where the closure shell is located in the environment
                                      [depth : Natural] 
@@ -261,9 +315,15 @@
 (define-type PrimitiveCommand (U                                
                                CheckToplevelBound!
                                CheckClosureArity!
+                               CheckPrimitiveArity!
+
                                ExtendEnvironment/Prefix!
                                InstallClosureValues!
                                FixClosureShellMap!
+                               
+                               SetFrameCallee!
+                               SpliceListIntoStack!
+                               UnspliceRestFromStack!
                                
                                RestoreEnvironment!
                                RestoreControl!))
@@ -271,7 +331,7 @@
 
 
 
-(define-type InstructionSequence (U Symbol instruction-sequence))
+(define-type InstructionSequence (U Symbol LinkedLabel instruction-sequence))
 (define-struct: instruction-sequence ([statements : (Listof Statement)])
   #:transparent)
 (define empty-instruction-sequence (make-instruction-sequence '()))
@@ -286,7 +346,12 @@
 
 (: statements (InstructionSequence -> (Listof Statement)))
 (define (statements s)
-  (if (symbol? s) (list s) (instruction-sequence-statements s)))
+  (cond [(symbol? s) 
+         (list s)]
+        [(LinkedLabel? s)
+         (list s)]
+        [else
+         (instruction-sequence-statements s)]))
 
 
 
@@ -327,7 +392,7 @@
 ;; statically known things, to generate better code.
 (define-struct: StaticallyKnownLam ([name : (U Symbol False)]
                                     [entry-point : Symbol]
-                                    [arity : Natural]) #:transparent)
+                                    [arity : Arity]) #:transparent)
 
 (define-type CompileTimeEnvironmentEntry 
   (U '?          ;; no knowledge
@@ -349,6 +414,15 @@
 (define-struct: BasicBlock ([name : Symbol] 
                             [stmts : (Listof UnlabeledStatement)]) 
   #:transparent)
+
+
+
+(define-type Arity (U Natural ArityAtLeast (Listof (U Natural ArityAtLeast))))
+(define-struct: ArityAtLeast ([value : Natural])
+  #:transparent)
+
+(define-predicate listof-atomic-arity? (Listof (U Natural ArityAtLeast)))
+
 
 
 

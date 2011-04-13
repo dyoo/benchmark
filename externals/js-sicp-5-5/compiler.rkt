@@ -4,6 +4,7 @@
          "lexical-structs.rkt"
          "il-structs.rkt"
          "kernel-primitives.rkt"
+         "optimize-il.rkt"
          racket/bool
          racket/list)
 
@@ -23,19 +24,20 @@
 (define (-compile exp target linkage)
   (let ([after-lam-bodies (make-label 'afterLamBodies)]
         [before-pop-prompt (make-label 'beforePopPrompt)])
-    (statements
-     (append-instruction-sequences 
-      
-      (make-instruction-sequence 
-       `(,(make-GotoStatement (make-Label after-lam-bodies))))
-      (compile-lambda-bodies (collect-all-lams exp))
-      after-lam-bodies
-      
-      (make-instruction-sequence
-       `(,(make-PushControlFrame/Prompt default-continuation-prompt-tag
-                                        before-pop-prompt)))
-      (compile exp '() target prompt-linkage)
-      before-pop-prompt))))
+    (optimize-il
+     (statements
+      (append-instruction-sequences 
+       
+       (make-instruction-sequence 
+        `(,(make-GotoStatement (make-Label after-lam-bodies))))
+       (compile-lambda-bodies (collect-all-lams exp))
+       after-lam-bodies
+       
+       (make-instruction-sequence
+        `(,(make-PushControlFrame/Prompt default-continuation-prompt-tag
+                                         before-pop-prompt)))
+       (compile exp '() target prompt-linkage)
+       before-pop-prompt)))))
 
 (define-struct: lam+cenv ([lam : Lam]
                           [cenv : CompileTimeEnvironment]))
@@ -114,9 +116,10 @@
   (append (map (lambda: ([d : Natural])
                         (list-ref cenv d))
                (Lam-closure-map lam))
-          (build-list (Lam-num-parameters lam) (lambda: ([i : Natural]) '?))))
-
-
+          (build-list (if (Lam-rest? lam)
+                          (add1 (Lam-num-parameters lam))
+                          (Lam-num-parameters lam))
+                      (lambda: ([i : Natural]) '?))))
 
 
 
@@ -174,7 +177,8 @@
             `(,(make-PerformStatement (make-ExtendEnvironment/Prefix! names))))
            (compile (Top-code top) (cons (Top-prefix top) cenv) target next-linkage)
            (make-instruction-sequence
-            `(,(make-PopEnvironment 1 0)))))))
+            `(,(make-PopEnvironment (make-Const 1) 
+                                    (make-Const 0))))))))
 
 
 
@@ -192,7 +196,8 @@
   (cond
     [(ReturnLinkage? linkage)
      (make-instruction-sequence `(,(make-AssignPrimOpStatement 'proc (make-GetControlStackLabel))
-                                  ,(make-PopEnvironment (length cenv) 0)
+                                  ,(make-PopEnvironment (make-Const (length cenv)) 
+                                                        (make-Const 0))
                                   ,(make-PopControlFrame)
                                   ,(make-GotoStatement (make-Reg 'proc))))]
     [(PromptLinkage? linkage)
@@ -208,6 +213,7 @@
 
 (: compile-constant (Constant CompileTimeEnvironment Target Linkage -> InstructionSequence))
 (define (compile-constant exp cenv target linkage)
+  ;; Compiles constant values.
   (end-with-linkage linkage
                     cenv
                     (make-instruction-sequence
@@ -217,6 +223,7 @@
 
 (: compile-local-reference (LocalRef CompileTimeEnvironment Target Linkage -> InstructionSequence))
 (define (compile-local-reference exp cenv target linkage)
+  ;; Compiles local references.
   (end-with-linkage linkage
                     cenv
                     (make-instruction-sequence
@@ -227,6 +234,7 @@
 
 
 (: compile-toplevel-reference (ToplevelRef CompileTimeEnvironment Target Linkage -> InstructionSequence))
+;; Compiles toplevel references.
 (define (compile-toplevel-reference exp cenv target linkage)
   (end-with-linkage linkage
                     cenv
@@ -241,6 +249,7 @@
 
 
 (: compile-toplevel-set (ToplevelSet CompileTimeEnvironment Target Linkage -> InstructionSequence))
+;; Compiles toplevel definition.
 (define (compile-toplevel-set exp cenv target linkage)
   (let* ([var (ToplevelSet-name exp)]
          [lexical-pos (make-EnvPrefixReference (ToplevelSet-depth exp)
@@ -257,6 +266,7 @@
 
 
 (: compile-branch (Branch CompileTimeEnvironment Target Linkage -> InstructionSequence))
+;; Compiles a conditional branch.
 (define (compile-branch exp cenv target linkage)
   (let: ([t-branch : LabelLinkage (make-LabelLinkage (make-label 'trueBranch))]
          [f-branch : LabelLinkage (make-LabelLinkage (make-label 'falseBranch))]
@@ -281,6 +291,7 @@
 
 
 (: compile-sequence ((Listof Expression) CompileTimeEnvironment Target Linkage -> InstructionSequence))
+;; Compiles a sequence of expressions.  The last expression will be compiled in the provided linkage.
 (define (compile-sequence seq cenv target linkage) 
   ;; All but the last will use next-linkage linkage.
   (if (last-exp? seq)
@@ -290,10 +301,13 @@
 
 
 (: compile-splice ((Listof Expression) CompileTimeEnvironment Target Linkage -> InstructionSequence))
-;; Wrap a continuation prompt around each of the expressions.
+;; Compiles a sequence of expressions.  A continuation prompt wraps around each of the expressions
+;; to delimit any continuation captures.
 (define (compile-splice seq cenv target linkage) 
   (cond [(last-exp? seq)
-         (let ([before-pop-prompt (make-label 'beforePromptPop)])
+         (let* ([before-pop-prompt-multiple (make-label 'beforePromptPopMultiple)]
+                [before-pop-prompt (make-LinkedLabel (make-label 'beforePromptPop)
+                                                     before-pop-prompt-multiple)])
            (end-with-linkage 
             linkage
             cenv
@@ -302,14 +316,20 @@
                                             default-continuation-prompt-tag
                                             before-pop-prompt)))
              (compile (first-exp seq) cenv target prompt-linkage)
+             before-pop-prompt-multiple
+             (make-instruction-sequence `(,(make-PopEnvironment (make-Reg 'argcount) (make-Const 0))))
              before-pop-prompt)))]
         [else
-         (let ([before-pop-prompt (make-label 'beforePromptPop)])
+         (let* ([before-pop-prompt-multiple (make-label 'beforePromptPopMultiple)]
+                [before-pop-prompt (make-LinkedLabel (make-label 'beforePromptPop)
+                                                     before-pop-prompt-multiple)])
            (append-instruction-sequences 
             (make-instruction-sequence `(,(make-PushControlFrame/Prompt
                                            (make-DefaultContinuationPromptTag)
                                            before-pop-prompt)))
             (compile (first-exp seq) cenv target prompt-linkage)
+            before-pop-prompt-multiple
+            (make-instruction-sequence `(,(make-PopEnvironment (make-Reg 'argcount) (make-Const 0))))
             before-pop-prompt
             (compile-splice (rest-exps seq) cenv target linkage)))]))
 
@@ -327,7 +347,9 @@
     `(,(make-AssignPrimOpStatement 
         target
         (make-MakeCompiledProcedure (Lam-entry-label exp)
-                                    (Lam-num-parameters exp)
+                                    (if (Lam-rest? exp)
+                                        (make-ArityAtLeast (Lam-num-parameters exp))
+                                        (Lam-num-parameters exp))
                                     (Lam-closure-map exp)
                                     (Lam-name exp)))))))
 
@@ -343,30 +365,43 @@
     `(,(make-AssignPrimOpStatement 
         target
         (make-MakeCompiledProcedureShell (Lam-entry-label exp)
-                                         (Lam-num-parameters exp)
+                                         (if (Lam-rest? exp)
+                                             (make-ArityAtLeast (Lam-num-parameters exp))
+                                             (Lam-num-parameters exp))
                                          (Lam-name exp)))))))
 
 
 (: compile-lambda-body (Lam CompileTimeEnvironment -> InstructionSequence))
 ;; Compiles the body of the lambda in the appropriate environment.
+;; Closures will target their value to the 'val register, and use return linkage.
 (define (compile-lambda-body exp cenv)
-  (append-instruction-sequences
-   
-   (make-instruction-sequence 
-    `(,(Lam-entry-label exp)))
-   
-   (if (not (empty? (Lam-closure-map exp)))
-       (make-instruction-sequence `(,(make-PerformStatement (make-InstallClosureValues!))))
-       empty-instruction-sequence)
-   
-   (compile (Lam-body exp)
-            (append (map (lambda: ([d : Natural]) 
-                                  (list-ref cenv d))
-                         (Lam-closure-map exp))
-                    ;; fixme: We need to capture the cenv so we can maintain static knowledge
-                    (build-list (Lam-num-parameters exp) (lambda: ([i : Natural]) '?)))
-            'val
-            return-linkage)))
+  (let: ([maybe-unsplice-rest-argument : InstructionSequence
+                                       (if (Lam-rest? exp)
+                                           (make-instruction-sequence 
+                                            `(,(make-PerformStatement 
+                                                (make-UnspliceRestFromStack! 
+                                                 (make-Const (Lam-num-parameters exp))
+                                                 (make-SubtractArg (make-Reg 'argcount)
+                                                                   (make-Const (Lam-num-parameters exp)))))))
+                                           empty-instruction-sequence)]
+         [maybe-install-closure-values : InstructionSequence
+                                       (if (not (empty? (Lam-closure-map exp)))
+                                           (make-instruction-sequence 
+                                            `(,(make-PerformStatement (make-InstallClosureValues!))))
+                                           empty-instruction-sequence)]
+         [lam-body-code : InstructionSequence
+                        (compile (Lam-body exp)
+                                 (extract-lambda-cenv exp cenv)
+                                 'val
+                                 return-linkage)])
+        
+        (append-instruction-sequences      
+         (make-instruction-sequence 
+          `(,(Lam-entry-label exp)))
+
+         maybe-unsplice-rest-argument
+         maybe-install-closure-values
+         lam-body-code)))
 
 
 
@@ -381,11 +416,14 @@
                                                         (lam+cenv-cenv (first exps)))
                                    (compile-lambda-bodies (rest exps)))]))
 
+
 (: extend-compile-time-environment/scratch-space (CompileTimeEnvironment Natural -> CompileTimeEnvironment))
 (define (extend-compile-time-environment/scratch-space cenv n)
   (append (build-list n (lambda: ([i : Natural])
                                  '?))
           cenv))
+
+
 
 (: compile-application (App CompileTimeEnvironment Target Linkage -> InstructionSequence))
 ;; Compiles procedure application
@@ -458,9 +496,15 @@
          empty-instruction-sequence)
      proc-code
      (juggle-operands operand-codes)
+     (make-instruction-sequence `(,(make-AssignImmediateStatement 
+                                    'argcount
+                                    (make-Const (length (App-operands exp))))))
      (compile-general-procedure-call cenv 
-                                     extended-cenv 
-                                     (length (App-operands exp))
+                                     (cond [(= (length extended-cenv)
+                                               (length (App-operands exp)))
+                                            (make-Reg 'argcount)]
+                                           [else 
+                                            (make-Const (length extended-cenv))])
                                      target
                                      linkage))))
 
@@ -576,8 +620,8 @@
                     (if (empty? rest-operands)
                         empty-instruction-sequence
                         (make-instruction-sequence `(,(make-PopEnvironment 
-                                                       (length rest-operands)
-                                                       0))))]
+                                                       (make-Const (length rest-operands))
+                                                       (make-Const 0)))))]
                    
                    [(constant-operand-poss)
                     (simple-operands->opargs constant-operands)]
@@ -692,15 +736,27 @@
                           (values (reverse constants) rands)))])))
 
 
+(define-predicate natural? Natural)
 
+(: arity-matches? (Arity Natural -> Boolean))
+(define (arity-matches? an-arity n)
+  (cond
+    [(natural? an-arity)
+     (= an-arity n)]
+    [(ArityAtLeast? an-arity)
+     (>= n (ArityAtLeast-value an-arity))]
+    [else
+     (error 'fixme)]))
 
 
 (: compile-statically-known-lam-application 
    (StaticallyKnownLam App CompileTimeEnvironment Target Linkage 
                        -> InstructionSequence))
 (define (compile-statically-known-lam-application static-knowledge exp cenv target linkage)
-  (unless (= (length (App-operands exp)) 
-             (StaticallyKnownLam-arity static-knowledge))
+  ;; FIXME: this needs to be turned into a runtime error, not a compile-time error, to preserve
+  ;; Racket semantics.
+  (unless (arity-matches? (StaticallyKnownLam-arity static-knowledge)
+                          (length (App-operands exp)))
     (error 'arity-mismatch "~s expected ~s arguments, but received ~s" 
            (StaticallyKnownLam-name static-knowledge)
            (StaticallyKnownLam-arity static-knowledge)
@@ -769,15 +825,18 @@
 
 
 
-(: compile-general-procedure-call (CompileTimeEnvironment CompileTimeEnvironment
-                                                          Natural Target Linkage 
+(: compile-general-procedure-call (CompileTimeEnvironment OpArg Target Linkage 
                                                           ->
                                                           InstructionSequence))
-;; Assumes the procedure value has been loaded into the proc register.
+;; Assumes the following:
+;; 1.  the procedure value has been loaded into the proc register.
+;; 2.  the n values passed in has been written into argcount register.
+;; 3.  environment stack contains the n operand values.
+;;
 ;; n is the number of arguments passed in.
 ;; cenv is the compile-time enviroment before arguments have been shifted in.
 ;; extended-cenv is the compile-time environment after arguments have been shifted in.
-(define (compile-general-procedure-call cenv extended-cenv n target linkage)
+(define (compile-general-procedure-call cenv extended-cenv-length target linkage)
   (let: ([primitive-branch : LabelLinkage (make-LabelLinkage (make-label 'primitiveBranch))]
          [compiled-branch : LabelLinkage (make-LabelLinkage (make-label 'compiledBranch))]
          [after-call : LabelLinkage (make-LabelLinkage (make-label 'afterCall))])
@@ -794,27 +853,26 @@
                ;; Compiled branch
                (LabelLinkage-label compiled-branch)
                (make-instruction-sequence
-                `(,(make-PerformStatement (make-CheckClosureArity! n))))
-               (compile-proc-appl extended-cenv (make-Reg 'val) n target compiled-linkage)
+                `(,(make-PerformStatement (make-CheckClosureArity! (make-Reg 'argcount)))))
+               (compile-compiled-procedure-application extended-cenv-length
+                                                       'val
+                                                       target
+                                                       compiled-linkage)
                
                
-               
+               ;; Primitive branch
                (LabelLinkage-label primitive-branch)
                (end-with-linkage
                 linkage
                 cenv
                 (append-instruction-sequences
                  (make-instruction-sequence 
-                  `(,(make-AssignPrimOpStatement 
-                      ;; Optimization: we put the result directly in the registers, or in
-                      ;; the appropriate spot on the stack.  This takes into account the popenviroment
-                      ;; that happens right afterwards.
-                      (adjust-target-depth target n)                     
-                      (make-ApplyPrimitiveProcedure n))))
-                 (if (not (= n 0))
-                     (make-instruction-sequence
-                      `(,(make-PopEnvironment n 0)))
-                     empty-instruction-sequence)
+                  `(,(make-PerformStatement (make-CheckPrimitiveArity! (make-Reg 'argcount)))
+                    ,(make-AssignPrimOpStatement 'val 
+                                                 (make-ApplyPrimitiveProcedure))
+                    ,(make-PopEnvironment (make-Reg 'argcount) 
+                                          (make-Const 0))
+                    ,(make-AssignImmediateStatement target (make-Reg 'val))))
                  (LabelLinkage-label after-call)))))))
 
 
@@ -826,11 +884,18 @@
                                           linkage
                                           after-call)])
          (append-instruction-sequences
-          (compile-proc-appl extended-cenv 
-                             (make-Label (StaticallyKnownLam-entry-point static-knowledge))
-                             n 
-                             target
-                             compiled-linkage)
+          (make-instruction-sequence `(,(make-AssignImmediateStatement 
+                                         'argcount
+                                         (make-Const n))))
+          (compile-compiled-procedure-application (cond
+                                                    [(= (length extended-cenv)
+                                                        n)
+                                                     (make-Reg 'argcount)]
+                                                    [else 
+                                                     (make-Const (length extended-cenv))])
+                                                  (make-Label (StaticallyKnownLam-entry-point static-knowledge))
+                                                  target
+                                                  compiled-linkage)
           (end-with-linkage
            linkage
            cenv
@@ -838,103 +903,172 @@
 
 
 
-(: compile-proc-appl (CompileTimeEnvironment (U Label Reg) Natural Target Linkage -> InstructionSequence))
+(: compile-compiled-procedure-application (OpArg (U Label 'val) Target Linkage -> InstructionSequence))
 ;; Three fundamental cases for general compiled-procedure application.
 ;;    1.  Tail calls.
 ;;    2.  Non-tail calls (next/label linkage) that write to val
 ;;    3.  Calls in argument position (next/label linkage) that write to the stack.
-(define (compile-proc-appl cenv-with-args entry-point n target linkage)
-  (cond [(ReturnLinkage? linkage)
+(define (compile-compiled-procedure-application cenv-length-with-args entry-point target linkage)
+  (let ([maybe-install-jump-address
+         ;; Optimization: if the entry-point is supposed to be val, then it needs to hold
+         ;; the procedure entry here.  Otherwise, it doesn't.
+         (cond [(Label? entry-point)
+                empty-instruction-sequence]
+               [(eq? entry-point 'val)
+                (make-instruction-sequence
+                 `(,(make-AssignPrimOpStatement 'val (make-GetCompiledProcedureEntry))))])]
+
+        [entry-point-target
          (cond
-           [(eq? target 'val)
-            ;; This case happens when we're in tail position.
-            ;; We clean up the stack right before the jump, and do not add
-            ;; to the control stack.
-            (let: ([num-slots-to-delete : Natural (ensure-natural (- (length cenv-with-args) n))])
-                  (append-instruction-sequences
-                   (make-instruction-sequence
-                    `(,(make-AssignPrimOpStatement 'val 
-                                                   (make-GetCompiledProcedureEntry))))
-                   (if (> num-slots-to-delete 0)
-                       (make-instruction-sequence `(,(make-PopEnvironment num-slots-to-delete n)))
-                       empty-instruction-sequence)
-                   (make-instruction-sequence
-                    `(,(make-GotoStatement entry-point)))))]
-           
-           [else
-            ;; This case should be impossible: return linkage should only
-            ;; occur when we're in tail position, and we should be in tail position
-            ;; only when the target is the val register.
-            (error 'compile "return linkage, target not val: ~s" target)])]
-        
-        
-         [(PromptLinkage? linkage)
-          (cond [(eq? target 'val)
-                 ;; This case happens for a function call that isn't in
-                 ;; tail position.
-                 (let ([proc-return (make-label 'procReturn)])
-                   (make-instruction-sequence 
-                    `(,(make-PushControlFrame proc-return)
-                      ,(make-AssignPrimOpStatement 'val (make-GetCompiledProcedureEntry))
-                      ,(make-GotoStatement entry-point)
-                      ,proc-return)))]
-                
-                [else
-                 ;; This case happens for evaluating arguments, since the
-                 ;; arguments are being installed into the scratch space.
-                 (let ([proc-return (make-label 'procReturn)])
-                   (make-instruction-sequence
-                    `(,(make-PushControlFrame proc-return)
-                      ,(make-AssignPrimOpStatement 'val (make-GetCompiledProcedureEntry))
-                      ,(make-GotoStatement entry-point)
-                      ,proc-return
-                      ,(make-AssignImmediateStatement target (make-Reg 'val)))))])]
-        
-        [(NextLinkage? linkage)
-         (cond [(eq? target 'val)
-                ;; This case happens for a function call that isn't in
-                ;; tail position.
-                (let ([proc-return (make-label 'procReturn)])
-                  (make-instruction-sequence 
-                   `(,(make-PushControlFrame proc-return)
-                     ,(make-AssignPrimOpStatement 'val (make-GetCompiledProcedureEntry))
-                     ,(make-GotoStatement entry-point)
-                     ,proc-return)))]
-               
-               [else
-                ;; This case happens for evaluating arguments, since the
-                ;; arguments are being installed into the scratch space.
-                (let ([proc-return (make-label 'procReturn)])
-                  (make-instruction-sequence
-                   `(,(make-PushControlFrame proc-return)
-                     ,(make-AssignPrimOpStatement 'val (make-GetCompiledProcedureEntry))
-                     ,(make-GotoStatement entry-point)
-                     ,proc-return
-                     ,(make-AssignImmediateStatement target (make-Reg 'val)))))])]
-        
-        [(LabelLinkage? linkage)
-         (cond [(eq? target 'val)
-                ;; This case happens for a function call that isn't in
-                ;; tail position.
-                (let ([proc-return (make-label 'procReturn)])
-                  (make-instruction-sequence 
-                   `(,(make-PushControlFrame proc-return)
-                     ,(make-AssignPrimOpStatement 'val (make-GetCompiledProcedureEntry))
-                     ,(make-GotoStatement entry-point)
-                     ,proc-return
-                     ,(make-GotoStatement (make-Label (LabelLinkage-label linkage))))))]
-               
-               [else
-                ;; This case happens for evaluating arguments, since the
-                ;; arguments are being installed into the scratch space.
-                (let ([proc-return (make-label 'procReturn)])
-                  (make-instruction-sequence
-                   `(,(make-PushControlFrame proc-return)
-                     ,(make-AssignPrimOpStatement 'val (make-GetCompiledProcedureEntry))
-                     ,(make-GotoStatement entry-point)
-                     ,proc-return
-                     ,(make-AssignImmediateStatement target (make-Reg 'val))
-                     ,(make-GotoStatement (make-Label (LabelLinkage-label linkage))))))])]))
+           [(Label? entry-point)
+            entry-point]
+           [(eq? entry-point 'val)
+            (make-Reg 'val)])])
+    
+    (cond [(ReturnLinkage? linkage)
+           (cond
+             [(eq? target 'val)
+              ;; This case happens when we're in tail position.
+              ;; We clean up the stack right before the jump, and do not add
+              ;; to the control stack.
+              (append-instruction-sequences
+               maybe-install-jump-address
+               (cond [(equal? cenv-length-with-args (make-Reg 'argcount))
+                      empty-instruction-sequence]
+                     [else
+                      (make-instruction-sequence `(,(make-PopEnvironment (make-SubtractArg cenv-length-with-args
+                                                                                           (make-Reg 'argcount))
+                                                                         (make-Reg 'argcount))))])
+               (make-instruction-sequence
+                `(;; Assign the proc value of the existing call frame
+                  ,(make-PerformStatement 
+                    (make-SetFrameCallee! (make-Reg 'proc)))
+                  
+                  ,(make-GotoStatement entry-point-target))))]
+             
+             [else
+              ;; This case should be impossible: return linkage should only
+              ;; occur when we're in tail position, and we should be in tail position
+              ;; only when the target is the val register.
+              (error 'compile "return linkage, target not val: ~s" target)])]
+          
+          
+          [(PromptLinkage? linkage)
+           (cond [(eq? target 'val)
+                  ;; This case happens for a function call that isn't in
+                  ;; tail position.
+                  (let* ([proc-return-multiple (make-label 'procReturnMultiple)]
+                         [proc-return (make-LinkedLabel (make-label 'procReturn)
+                                                        proc-return-multiple)])
+                    (append-instruction-sequences
+                     (make-instruction-sequence 
+                      `(,(make-PushControlFrame proc-return)))
+                     maybe-install-jump-address
+                     (make-instruction-sequence
+                      `(,(make-GotoStatement entry-point-target)))
+                     proc-return-multiple
+                     (make-instruction-sequence `(,(make-PopEnvironment (make-Reg 'argcount) 
+                                                                        (make-Const 0))))
+                     proc-return))]
+                 
+                 [else
+                  ;; This case happens for evaluating arguments, since the
+                  ;; arguments are being installed into the scratch space.
+                  (let* ([proc-return-multiple (make-label 'procReturnMultiple)]
+                         [proc-return (make-LinkedLabel (make-label 'procReturn)
+                                                        proc-return-multiple)])
+                    (append-instruction-sequences
+                     (make-instruction-sequence
+                      `(,(make-PushControlFrame proc-return)))
+                     maybe-install-jump-address
+                     (make-instruction-sequence
+                      `(,(make-GotoStatement entry-point-target)))
+                     proc-return-multiple
+                     ;; FIXME: this needs to error out instead!
+                     (make-instruction-sequence `(,(make-PopEnvironment (make-Reg 'argcount) 
+                                                                        (make-Const 0))))
+                     proc-return
+                     (make-instruction-sequence
+                      `(,(make-AssignImmediateStatement target (make-Reg 'val))))))])]
+          
+          [(NextLinkage? linkage)
+           (cond [(eq? target 'val)
+                  ;; This case happens for a function call that isn't in
+                  ;; tail position.
+                  (let* ([proc-return-multiple (make-label 'procReturnMultiple)]
+                         [proc-return (make-LinkedLabel (make-label 'procReturn)
+                                                        proc-return-multiple)])
+                    (append-instruction-sequences
+                     (make-instruction-sequence 
+                      `(,(make-PushControlFrame proc-return)))
+                     maybe-install-jump-address
+                     (make-instruction-sequence
+                      `(,(make-GotoStatement entry-point-target)))
+                     proc-return-multiple
+                     (make-instruction-sequence `(,(make-PopEnvironment (make-Reg 'argcount) 
+                                                                        (make-Const 0))))
+                     proc-return))]
+                 
+                 [else
+                  ;; This case happens for evaluating arguments, since the
+                  ;; arguments are being installed into the scratch space.
+                  (let* ([proc-return-multiple (make-label 'procReturnMultiple)]
+                         [proc-return (make-LinkedLabel (make-label 'procReturn)
+                                                        proc-return-multiple)])
+                    (append-instruction-sequences
+                     (make-instruction-sequence
+                      `(,(make-PushControlFrame proc-return)))
+                     maybe-install-jump-address
+                     (make-instruction-sequence
+                      `(,(make-GotoStatement entry-point-target)))
+                     proc-return-multiple
+                     ;; FIMXE: this needs to raise a runtime error!
+                     (make-instruction-sequence `(,(make-PopEnvironment (make-Reg 'argcount) 
+                                                                        (make-Const 0))))
+                     proc-return
+                     (make-instruction-sequence
+                      `(,(make-AssignImmediateStatement target (make-Reg 'val))))))])]
+          
+          [(LabelLinkage? linkage)
+           (cond [(eq? target 'val)
+                  ;; This case happens for a function call that isn't in
+                  ;; tail position.
+                  (let* ([proc-return-multiple (make-label 'procReturnMultiple)]
+                         [proc-return (make-LinkedLabel (make-label 'procReturn)
+                                                        proc-return-multiple)])
+                    (append-instruction-sequences
+                     (make-instruction-sequence 
+                      `(,(make-PushControlFrame proc-return)))
+                     maybe-install-jump-address
+                     (make-instruction-sequence
+                      `(,(make-GotoStatement entry-point-target)))
+                     proc-return-multiple
+                     (make-instruction-sequence `(,(make-PopEnvironment (make-Reg 'argcount) 
+                                                                        (make-Const 0))))
+                     proc-return
+                     (make-instruction-sequence
+                      `(,(make-GotoStatement (make-Label (LabelLinkage-label linkage)))))))]
+                 
+                 [else
+                  ;; This case happens for evaluating arguments, since the
+                  ;; arguments are being installed into the scratch space.
+                  (let* ([proc-return-multiple (make-label 'procReturnMultiple)]
+                         [proc-return (make-LinkedLabel (make-label 'procReturn)
+                                                        proc-return-multiple)])
+                    (append-instruction-sequences
+                     (make-instruction-sequence
+                      `(,(make-PushControlFrame proc-return)))
+                     maybe-install-jump-address
+                     (make-instruction-sequence
+                      `(,(make-GotoStatement entry-point-target)))
+                     proc-return-multiple
+                     ;; FIXME: this needs to raise a runtime error here!
+                     (make-instruction-sequence `(,(make-PopEnvironment (make-Reg 'argcount) 
+                                                                        (make-Const 0))))                     
+                     proc-return
+                     (make-instruction-sequence
+                      `(,(make-AssignImmediateStatement target (make-Reg 'val))
+                        ,(make-GotoStatement (make-Label (LabelLinkage-label linkage)))))))])])))
 
 
 
@@ -946,7 +1080,9 @@
     [(Lam? exp)
      (make-StaticallyKnownLam (Lam-name exp)
                               (Lam-entry-label exp)
-                              (Lam-num-parameters exp))]
+                              (if (Lam-rest? exp)
+                                  (make-ArityAtLeast (Lam-num-parameters exp))
+                                  (Lam-num-parameters exp)))]
     [(and (LocalRef? exp) 
           (not (LocalRef-unbox? exp)))
      (let ([entry (list-ref cenv (LocalRef-depth exp))])
@@ -1002,7 +1138,7 @@
            rhs-code
            body-code
            (LabelLinkage-label after-body-code)
-           (make-instruction-sequence `(,(make-PopEnvironment 1 0)))
+           (make-instruction-sequence `(,(make-PopEnvironment (make-Const 1) (make-Const 0))))
            after-let1))))
 
 
@@ -1038,7 +1174,7 @@
            body-code
            (LabelLinkage-label after-body-code)
            (if (> n 0)
-               (make-instruction-sequence `(,(make-PopEnvironment n 0)))
+               (make-instruction-sequence `(,(make-PopEnvironment (make-Const n) (make-Const 0))))
                empty-instruction-sequence)
            after-let))))
 
@@ -1101,7 +1237,7 @@
            (compile (LetRec-body exp) extended-cenv (adjust-target-depth target n) letrec-linkage)
            (LabelLinkage-label after-body-code)
            (if (> n 0)
-               (make-instruction-sequence `(,(make-PopEnvironment n 0)))
+               (make-instruction-sequence `(,(make-PopEnvironment (make-Const n) (make-Const 0))))
                empty-instruction-sequence)))))
 
 
@@ -1168,6 +1304,8 @@
      target]
     [(eq? target 'proc)
      target]
+    [(eq? target 'argcount)
+     target]
     [(EnvLexicalReference? target)
      (make-EnvLexicalReference (+ n (EnvLexicalReference-depth target))
                                (EnvLexicalReference-unbox? target))]
@@ -1176,29 +1314,6 @@
                               (EnvPrefixReference-pos target))]
     [(PrimitivesReference? target)
      target]))
-
-
-(: adjust-oparg-depth (OpArg Integer -> OpArg))
-(define (adjust-oparg-depth arg n)
-  (cond
-    [(Const? arg)
-     arg]
-    
-    [(Reg? arg)
-     arg]
-    
-    [(Label? arg)
-     arg]
-    
-    [(EnvLexicalReference? arg)
-     (make-EnvLexicalReference (ensure-natural (+ n (EnvLexicalReference-depth arg)))
-                               (EnvLexicalReference-unbox? arg))]
-    [(EnvPrefixReference? arg)
-     (make-EnvPrefixReference (ensure-natural (+ n (EnvPrefixReference-depth arg)))
-                              (EnvPrefixReference-pos arg))]
-    [(EnvWholePrefixReference? arg)
-     (make-EnvWholePrefixReference (ensure-natural (+ n (EnvWholePrefixReference-depth arg))))]))
-
 
 
 
@@ -1245,6 +1360,7 @@
     [(Lam? exp)
      (make-Lam (Lam-name exp)
                (Lam-num-parameters exp)
+               (Lam-rest? exp)
                (Lam-body exp)
                (map (lambda: ([d : Natural]) 
                              (if (< d skip)
