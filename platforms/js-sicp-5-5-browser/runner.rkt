@@ -43,7 +43,7 @@
                     
                     (fprintf op #<<EOF
 return (function(succ, fail, params) {
-            return innerInvoke(MACHINE, succ, fail, params);
+            return innerInvoke(new plt.runtime.Machine(), succ, fail, params);
         });
 });
 EOF

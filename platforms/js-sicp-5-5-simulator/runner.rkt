@@ -3,7 +3,7 @@
          "../../get-host-info.rkt"
          "../../externals/js-sicp-5-5/simulator.rkt"
          "../../externals/js-sicp-5-5/parse.rkt"
-         "../../externals/js-sicp-5-5/compile.rkt"
+         "../../externals/js-sicp-5-5/compiler.rkt"
          "../../externals/js-sicp-5-5/simulator-structs.rkt")
 
 
