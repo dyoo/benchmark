@@ -89,7 +89,7 @@
            (format "(~a === RUNTIME.NULL)" (first checked-operands))]
 
           [(not)
-           (format "(!(~a))" (first checked-operands))]
+           (format "(~a === false)" (first checked-operands))]
           
           [(eq?)
            (format "(~a === ~a)" (first checked-operands) (second checked-operands))])))
@@ -137,7 +137,7 @@
                            [(box)
                             (format "(typeof(~a) === 'object' && (~a).length === 1)"
                                     operand-string operand-string)])])
-           (format "((~a) ? (~a) : RUNTIME.raise(new Error('~a: expected ' + ~s + ' as argument ' + ~s + ' but received ' + ~a)))"
+           (format "((~a) ? (~a) : RUNTIME.raise(MACHINE, new Error('~a: expected ' + ~s + ' as argument ' + ~s + ' but received ' + ~a)))"
                    test-string
                    operand-string
 		   caller

@@ -34,7 +34,13 @@
 (define-type Target (U AtomicRegisterSymbol 
                        EnvLexicalReference
                        EnvPrefixReference
-                       PrimitivesReference))
+                       PrimitivesReference                   
+                       ControlFrameTemporary))
+
+
+;; When we need to store a value temporarily in the top control frame, we can use this as a target.
+(define-struct: ControlFrameTemporary ([name : (U 'pendingContinuationMarkKey)])
+  #:transparent)
 
 
 
@@ -74,11 +80,12 @@
                                  
                                  PushImmediateOntoEnvironment
                                  
-                                 PushControlFrame
+                                 PushControlFrame/Generic
+                                 PushControlFrame/Call
                                  PushControlFrame/Prompt
 
-                                 PopControlFrame
-                                 PopControlFrame/Prompt))
+                                 PopControlFrame))
+
 
 (define-type Statement (U UnlabeledStatement
                           Symbol      ;; label
@@ -116,13 +123,16 @@
 
 (define-struct: PopControlFrame () 
   #:transparent)
-(define-struct: PopControlFrame/Prompt () 
+
+
+;; A generic control frame only holds marks and other temporary variables.
+(define-struct: PushControlFrame/Generic ()
   #:transparent)
 
 ;; Adding a frame for getting back after procedure application.
 ;; The 'proc register must hold either #f or a closure at the time of
 ;; this call, as the control frame will hold onto the called procedure record.
-(define-struct: PushControlFrame ([label : (U Symbol LinkedLabel)]) 
+(define-struct: PushControlFrame/Call ([label : (U Symbol LinkedLabel)]) 
   #:transparent)
 
 (define-struct: PushControlFrame/Prompt ([tag : (U OpArg DefaultContinuationPromptTag)]
@@ -305,12 +315,14 @@
   #:transparent)
 
 ;; Changes over the control located at the given argument from the structure in env[1]
-(define-struct: RestoreControl! ([tag : (U DefaultContinuationPromptTag OpArg)]))
+(define-struct: RestoreControl! ([tag : (U DefaultContinuationPromptTag OpArg)]) #:transparent)
 
 ;; Changes over the environment located at the given argument from the structure in env[0]
-(define-struct: RestoreEnvironment! ())
+(define-struct: RestoreEnvironment! () #:transparent)
 
 
+;; Adds a continuation mark into the current top control frame.
+(define-struct: InstallContinuationMarkEntry! () #:transparent)
 
 (define-type PrimitiveCommand (U                                
                                CheckToplevelBound!
@@ -320,6 +332,8 @@
                                ExtendEnvironment/Prefix!
                                InstallClosureValues!
                                FixClosureShellMap!
+           
+                               InstallContinuationMarkEntry!
                                
                                SetFrameCallee!
                                SpliceListIntoStack!

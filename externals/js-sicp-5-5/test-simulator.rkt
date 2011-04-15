@@ -167,34 +167,34 @@
 ;; PushControl
 (let ([m (new-machine `(,(make-AssignImmediateStatement 'proc (make-Const #f))
                         foo 
-                        ,(make-PushControlFrame 'foo)
+                        ,(make-PushControlFrame/Call 'foo)
                         bar
-                        ,(make-PushControlFrame 'bar)
+                        ,(make-PushControlFrame/Call 'bar)
                         baz
                         ))])
   (test (machine-control (run! m))
-        (list (make-CallFrame 'bar #f)
-              (make-CallFrame 'foo #f))))
+        (list (make-CallFrame 'bar #f (make-hasheq) (make-hasheq))
+              (make-CallFrame 'foo #f (make-hasheq) (make-hasheq)))))
 
 
 
 ;; PopControl
 (let ([m (new-machine `(,(make-AssignImmediateStatement 'proc (make-Const #f))
                         foo 
-                        ,(make-PushControlFrame 'foo)
+                        ,(make-PushControlFrame/Call 'foo)
                         bar
-                        ,(make-PushControlFrame 'bar)
+                        ,(make-PushControlFrame/Call 'bar)
                         baz
                         ,(make-PopControlFrame)
                         ))])
   (test (machine-control (run! m))
-        (list (make-CallFrame 'foo #f))))
+        (list (make-CallFrame 'foo #f (make-hasheq) (make-hasheq)))))
 
 (let ([m (new-machine `(,(make-AssignImmediateStatement 'proc (make-Const #f))
                         foo 
-                        ,(make-PushControlFrame 'foo)
+                        ,(make-PushControlFrame/Call 'foo)
                         bar
-                        ,(make-PushControlFrame 'bar)
+                        ,(make-PushControlFrame/Call 'bar)
                         baz
                         ,(make-PopControlFrame)
                         ,(make-PopControlFrame)))])
@@ -488,7 +488,7 @@
 ;; GetControlStackLabel
 (let ([m (new-machine `(,(make-AssignImmediateStatement 'proc (make-Const #f))
                         foo
-                        ,(make-PushControlFrame 'foo)
+                        ,(make-PushControlFrame/Call 'foo)
                         ,(make-AssignPrimOpStatement 'proc (make-GetControlStackLabel))))])
   (test (machine-proc (run! m))
         'foo))

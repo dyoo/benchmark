@@ -15,7 +15,8 @@
                                                    
                                                    (Vectorof PrimitiveValue)
                                                    MutablePair
-                                                   
+
+                                                   ContinuationMarkSet
                                                    )))
 (define-type SlotValue (U PrimitiveValue 
                           (Boxof PrimitiveValue)
@@ -56,26 +57,80 @@
   #:mutable)
 
 
-(define-type frame (U CallFrame PromptFrame))
+
+(define-type frame (U GenericFrame CallFrame PromptFrame))
+
+
+(define-struct: GenericFrame ([temps : (HashTable Symbol PrimitiveValue)]
+                              [marks : (HashTable PrimitiveValue PrimitiveValue)])
+  #:transparent)
+
 
 (define-struct: CallFrame ([return : (U Symbol LinkedLabel)]
                            ;; The procedure being called.  Used to optimize self-application
                            [proc : (U closure #f)]
                            ;; TODO: add continuation marks
-                           )
+                           [temps : (HashTable Symbol PrimitiveValue)]
+                           [marks : (HashTable PrimitiveValue PrimitiveValue)])
   #:transparent
-  #:mutable)
+  #:mutable)  ;; mutable because we want to allow mutation of proc.
 
 (define-struct: PromptFrame ([tag : ContinuationPromptTagValue]
                              [return : (U Symbol LinkedLabel)]
-                             [env-depth : Natural])
+                             [env-depth : Natural]
+                             [temps : (HashTable Symbol PrimitiveValue)]
+                             [marks : (HashTable PrimitiveValue PrimitiveValue)])
   #:transparent)
+
+
+(: frame-temps (frame -> (HashTable Symbol PrimitiveValue)))
+(define (frame-temps a-frame)
+  (cond
+    [(GenericFrame? a-frame)
+     (GenericFrame-temps a-frame)]
+    [(CallFrame? a-frame)
+     (CallFrame-temps a-frame)]
+    [(PromptFrame? a-frame)
+     (PromptFrame-temps a-frame)]))
+
+
+(: frame-marks (frame -> (HashTable PrimitiveValue PrimitiveValue)))
+(define (frame-marks a-frame)
+  (cond
+    [(GenericFrame? a-frame)
+     (GenericFrame-marks a-frame)]
+    [(CallFrame? a-frame)
+     (CallFrame-marks a-frame)]
+    [(PromptFrame? a-frame)
+     (PromptFrame-marks a-frame)]))
+
+
+(: frame-tag (frame -> (U ContinuationPromptTagValue #f)))
+(define (frame-tag a-frame)
+  (cond
+    [(GenericFrame? a-frame)
+     #f]
+    [(CallFrame? a-frame)
+     #f]
+    [(PromptFrame? a-frame)
+     (PromptFrame-tag a-frame)]))
+
+
 
 (define-struct: ContinuationPromptTagValue ([name : Symbol])
   #:transparent)
 
 (define default-continuation-prompt-tag-value 
   (make-ContinuationPromptTagValue 'default-continuation-prompt))
+
+
+
+(define-struct: ContinuationMarkSet ([marks : (Listof (Pairof PrimitiveValue PrimitiveValue))])
+  #:transparent)
+
+
+
+
 
 
 

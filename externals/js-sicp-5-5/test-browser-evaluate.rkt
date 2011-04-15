@@ -72,8 +72,28 @@ EOF
 
 
 
+
+
+
+
 (test '(display 42)
       "42")
+
+(test '(displayln (+))
+      "0\n")
+
+(test '(displayln (*))
+      "1\n")
+
+(test '(displayln (- 3))
+      "-3\n")
+
+(test '(displayln (- 3 4))
+      "-1\n")
+
+(test '(displayln (- 3 4 -10))
+      "9\n")
+
 
 (test '(display (+ 3 4))
       "7")
@@ -121,8 +141,17 @@ EOF
 (test '(displayln (not (not 3)))
       "true\n")
 
+(test '(displayln (not 0))
+      "false\n")
+
+
 (test '(displayln (add1 1))
       "2\n")
+
+
+(test '(displayln (if 0 1 2))
+      "1\n")
+
 
 (test/exn '(displayln (add1 "0"))
           "Error: add1: expected number as argument 1 but received 0")
@@ -136,17 +165,47 @@ EOF
 (test '(displayln (< 1 2))
       "true\n")
 
+(test '(displayln (< 2 1 ))
+      "false\n")
+
+(test '(displayln (< 1 1 ))
+      "false\n")
+
+
 (test '(displayln (<= 1 2))
+      "true\n")
+
+(test '(displayln (<= 2 1))
+      "false\n")
+
+(test '(displayln (<= 2 2))
       "true\n")
 
 (test '(displayln (= 1 2))
       "false\n")
 
+(test '(displayln (= 1 1))
+      "true\n")
+
+
 (test '(displayln (> 1 2))
+      "false\n")
+
+(test '(displayln (> 2 1))
+      "true\n")
+
+(test '(displayln (> 2 2))
       "false\n")
 
 (test '(displayln (>= 1 2))
       "false\n")
+
+(test '(displayln (>= 2 1))
+      "true\n")
+
+(test '(displayln (>= 2 2))
+      "true\n")
+
 
 (test '(displayln (car (cons 3 4)))
       "3\n")
@@ -331,6 +390,98 @@ EOF
 
 (test '(displayln (member 6 '(1 2 5 4 3)))
       "false\n")
+
+
+(test '(displayln (length (reverse '())))
+      "0\n")
+
+(test '(displayln (car (reverse '("x"))))
+      "x\n")
+
+(test '(displayln (car (reverse '("x" "y"))))
+      "y\n")
+
+(test '(displayln (car (cdr (reverse '("x" "y")))))
+      "x\n")
+
+(test '(displayln (car (reverse '("x" "y" "z"))))
+      "z\n")
+(test '(displayln (car (cdr (reverse '("x" "y" "z")))))
+      "y\n")
+(test '(displayln (car (cdr (cdr (reverse '("x" "y" "z"))))))
+      "x\n")
+
+
+(test '(begin (displayln (vector-length (vector))))
+      "0\n")
+
+(test '(begin (displayln (vector-length (vector 3 1 4))))
+      "3\n")
+
+(test '(begin (displayln (vector-ref (vector 3 1 4) 0)))
+      "3\n")
+
+(test '(begin (displayln (vector-ref (vector 3 1 4) 1)))
+      "1\n")
+
+(test '(begin (displayln (vector-ref (vector 3 1 4) 2)))
+      "4\n")
+
+(test '(begin (define v (vector "hello" "world"))
+	      (vector-set! v 0 'hola)
+	      (displayln (vector-ref v 0)))
+      "hola\n")
+
+(test '(begin (define v (vector "hello" "world"))
+	      (vector-set! v 0 'hola)
+	      (displayln (vector-ref v 1)))
+      "world\n")
+
+
+
+(test '(begin (define l (vector->list (vector "hello" "world")))
+	      (displayln (length l))
+	      (displayln (car l))
+	      (displayln (car (cdr l))))
+      "2\nhello\nworld\n")
+
+
+(test '(displayln (equal? '(1 2 3)
+			  (append '(1) '(2) '(3))))
+      "true\n")
+
+
+(test '(displayln (equal? '(1 2 3)
+			  (append '(1 2) '(3))))
+      "true\n")
+
+(test '(displayln (equal? '(1 2 3)
+			  (append '(1 2) 3)))
+      "false\n")
+
+(test '(displayln (equal? "hello"
+			  (string-append "he" "llo")))
+      "true\n")
+
+
+(test '(displayln (equal? '(1 2 (3))
+			  '(1 2 (3))))
+      "true\n")
+
+
+(test '(displayln (equal? (list 1 2 (vector 3))
+			  (list 1 2 (vector 3))))
+      "true\n")
+
+
+(test '(displayln (equal? (list 1 2 (vector 4))
+			  (list 1 2 (vector 3))))
+      "false\n")
+
+      
+
+
+
 
 
 

@@ -139,13 +139,13 @@ EOF
           (next)]
          [(PushImmediateOntoEnvironment? stmt)
           (next)]
-         [(PushControlFrame? stmt)
+         [(PushControlFrame/Generic? stmt)
+          (next)]
+         [(PushControlFrame/Call? stmt)
           (next)]
          [(PushControlFrame/Prompt? stmt)
           (next)]
          [(PopControlFrame? stmt)
-          (next)]
-         [(PopControlFrame/Prompt? stmt)
           (next)]))]))
        
 
@@ -228,6 +228,8 @@ EOF
       [(UnspliceRestFromStack!? op)
        empty]
       [(FixClosureShellMap!? op)
+       empty]
+      [(InstallContinuationMarkEntry!? op)
        empty]))
   
   (unique/eq?
@@ -259,13 +261,13 @@ EOF
                              empty]
                             [(PushImmediateOntoEnvironment? stmt)
                              (collect-input (PushImmediateOntoEnvironment-value stmt))]
-                            [(PushControlFrame? stmt)
-                             (label->labels (PushControlFrame-label stmt))]
+                            [(PushControlFrame/Generic? stmt)
+                             empty]
+                            [(PushControlFrame/Call? stmt)
+                             (label->labels (PushControlFrame/Call-label stmt))]
                             [(PushControlFrame/Prompt? stmt)
                              (label->labels (PushControlFrame/Prompt-label stmt))]
                             [(PopControlFrame? stmt)
-                             empty]
-                            [(PopControlFrame/Prompt? stmt)
                              empty])
                           (loop (rest stmts))))]))))
 
@@ -317,7 +319,7 @@ EOF
       (let*: ([test : PrimitiveTest (TestAndBranchStatement-op stmt)])
              (cond
                [(eq? test 'false?)
-                (format "if (! ~a) { ~a }"
+                (format "if (~a === false) { ~a }"
                         (assemble-reg (make-Reg (TestAndBranchStatement-register stmt)))
                         (assemble-jump (make-Label (TestAndBranchStatement-label stmt))))]
                [(eq? test 'one?)
@@ -332,9 +334,12 @@ EOF
      [(GotoStatement? stmt)
       (assemble-jump (GotoStatement-target stmt))]
 
-     [(PushControlFrame? stmt)
+     [(PushControlFrame/Generic? stmt)
+      "MACHINE.control.push(new RUNTIME.Frame());"]
+     
+     [(PushControlFrame/Call? stmt)
       (format "MACHINE.control.push(new RUNTIME.CallFrame(~a, MACHINE.proc));" 
-              (let ([label (PushControlFrame-label stmt)])
+              (let ([label (PushControlFrame/Call-label stmt)])
                 (cond
                   [(symbol? label) label]
                   [(LinkedLabel? label) (LinkedLabel-label label)])))]
@@ -357,9 +362,6 @@ EOF
      [(PopControlFrame? stmt)
       "MACHINE.control.pop();"]
      
-     [(PopControlFrame/Prompt? stmt)
-      "MACHINE.control.pop();"]
-
      [(PushEnvironment? stmt)
       (if (= (PushEnvironment-n stmt) 0)
           ""
@@ -588,7 +590,11 @@ EOF
     [(UnspliceRestFromStack!? op)
      (format "RUNTIME.unspliceRestFromStack(MACHINE, ~a, ~a);"
              (assemble-oparg (UnspliceRestFromStack!-depth op))
-             (assemble-oparg (UnspliceRestFromStack!-length op)))]))
+             (assemble-oparg (UnspliceRestFromStack!-length op)))]
+    [(InstallContinuationMarkEntry!? op)
+     (string-append "RUNTIME.installContinuationMarkEntry(MACHINE,"
+                    "MACHINE.control[MACHINE.control.length-1].pendingContinuationMarkKey,"
+                    "MACHINE.val);")]))
 
 
 

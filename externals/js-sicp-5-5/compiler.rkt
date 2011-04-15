@@ -107,7 +107,11 @@
                             (map (lambda: ([lam : Lam])
                                           (loop lam new-cenv))
                                  (LetRec-procs exp)))
-                     (loop (LetRec-body exp) new-cenv)))])))
+                     (loop (LetRec-body exp) new-cenv)))]
+          [(WithContMark? exp)
+           (append (loop (WithContMark-key exp) cenv)
+                   (loop (WithContMark-value exp) cenv)
+                   (loop (WithContMark-body exp) cenv))])))
 
 
 
@@ -162,7 +166,9 @@
     [(BoxEnv? exp)
      (compile-box-environment-value exp cenv target linkage)]
     [(LetRec? exp)
-     (compile-let-rec exp cenv target linkage)]))
+     (compile-let-rec exp cenv target linkage)]
+    [(WithContMark? exp)
+     (compile-with-cont-mark exp cenv target linkage)]))
 
 
 
@@ -202,7 +208,7 @@
                                   ,(make-GotoStatement (make-Reg 'proc))))]
     [(PromptLinkage? linkage)
      (make-instruction-sequence `(,(make-AssignPrimOpStatement 'proc (make-GetControlStackLabel))
-                                  ,(make-PopControlFrame/Prompt)
+                                  ,(make-PopControlFrame)
                                   ,(make-GotoStatement (make-Reg 'proc))))]
     [(NextLinkage? linkage)
      empty-instruction-sequence]
@@ -962,7 +968,7 @@
                                                         proc-return-multiple)])
                     (append-instruction-sequences
                      (make-instruction-sequence 
-                      `(,(make-PushControlFrame proc-return)))
+                      `(,(make-PushControlFrame/Call proc-return)))
                      maybe-install-jump-address
                      (make-instruction-sequence
                       `(,(make-GotoStatement entry-point-target)))
@@ -979,7 +985,7 @@
                                                         proc-return-multiple)])
                     (append-instruction-sequences
                      (make-instruction-sequence
-                      `(,(make-PushControlFrame proc-return)))
+                      `(,(make-PushControlFrame/Call proc-return)))
                      maybe-install-jump-address
                      (make-instruction-sequence
                       `(,(make-GotoStatement entry-point-target)))
@@ -1000,7 +1006,7 @@
                                                         proc-return-multiple)])
                     (append-instruction-sequences
                      (make-instruction-sequence 
-                      `(,(make-PushControlFrame proc-return)))
+                      `(,(make-PushControlFrame/Call proc-return)))
                      maybe-install-jump-address
                      (make-instruction-sequence
                       `(,(make-GotoStatement entry-point-target)))
@@ -1017,7 +1023,7 @@
                                                         proc-return-multiple)])
                     (append-instruction-sequences
                      (make-instruction-sequence
-                      `(,(make-PushControlFrame proc-return)))
+                      `(,(make-PushControlFrame/Call proc-return)))
                      maybe-install-jump-address
                      (make-instruction-sequence
                       `(,(make-GotoStatement entry-point-target)))
@@ -1038,7 +1044,7 @@
                                                         proc-return-multiple)])
                     (append-instruction-sequences
                      (make-instruction-sequence 
-                      `(,(make-PushControlFrame proc-return)))
+                      `(,(make-PushControlFrame/Call proc-return)))
                      maybe-install-jump-address
                      (make-instruction-sequence
                       `(,(make-GotoStatement entry-point-target)))
@@ -1057,7 +1063,7 @@
                                                         proc-return-multiple)])
                     (append-instruction-sequences
                      (make-instruction-sequence
-                      `(,(make-PushControlFrame proc-return)))
+                      `(,(make-PushControlFrame/Call proc-return)))
                      maybe-install-jump-address
                      (make-instruction-sequence
                       `(,(make-GotoStatement entry-point-target)))
@@ -1260,6 +1266,44 @@
    (compile (BoxEnv-body exp) cenv target linkage)))
 
 
+
+
+(: compile-with-cont-mark (WithContMark CompileTimeEnvironment Target Linkage -> InstructionSequence))
+(define (compile-with-cont-mark exp cenv target linkage)
+  (cond
+    [(or (PromptLinkage? linkage) (ReturnLinkage? linkage))
+     (append-instruction-sequences
+      (compile (WithContMark-key exp) cenv 'val next-linkage)
+      (make-instruction-sequence `(,(make-AssignImmediateStatement
+                                     (make-ControlFrameTemporary 'pendingContinuationMarkKey)
+                                     (make-Reg 'val))))
+      (compile (WithContMark-value exp) cenv 'val next-linkage)
+      (make-instruction-sequence `(,(make-PerformStatement
+                                     (make-InstallContinuationMarkEntry!))))
+      (compile (WithContMark-body exp) cenv target linkage))]
+    
+    [(or (NextLinkage? linkage)
+         (LabelLinkage? linkage))
+     (end-with-linkage 
+      linkage cenv
+      (append-instruction-sequences
+       ;; Making a continuation frame; isn't really used for anything
+       ;; but recording the key/value data.
+       (make-instruction-sequence 
+        `(,(make-PushControlFrame/Generic)))
+       (compile (WithContMark-key exp) cenv 'val next-linkage)
+       (make-instruction-sequence `(,(make-AssignImmediateStatement
+                                      (make-ControlFrameTemporary 'pendingContinuationMarkKey)
+                                      (make-Reg 'val))))
+       (compile (WithContMark-value exp) cenv 'val next-linkage)
+       (make-instruction-sequence `(,(make-PerformStatement
+                                      (make-InstallContinuationMarkEntry!))))
+       (compile (WithContMark-body exp) cenv target next-linkage)
+       (make-instruction-sequence
+        `(,(make-PopControlFrame)))))]))
+
+
+
 (: append-instruction-sequences (InstructionSequence * -> InstructionSequence))
 (define (append-instruction-sequences . seqs)
   (append-seq-list seqs))
@@ -1313,6 +1357,8 @@
      (make-EnvPrefixReference (+ n (EnvPrefixReference-depth target))
                               (EnvPrefixReference-pos target))]
     [(PrimitivesReference? target)
+     target]
+    [(ControlFrameTemporary? target)
      target]))
 
 
@@ -1430,6 +1476,11 @@
          (make-BoxEnv (BoxEnv-depth exp)
                       (adjust-expression-depth (BoxEnv-body exp) n skip))
          (make-BoxEnv (ensure-natural (- (BoxEnv-depth exp) n))
-                      (adjust-expression-depth (BoxEnv-body exp) n skip)))]))
+                      (adjust-expression-depth (BoxEnv-body exp) n skip)))]
+
+    [(WithContMark? exp)
+     (make-WithContMark (adjust-expression-depth (WithContMark-key exp) n skip)
+                        (adjust-expression-depth (WithContMark-value exp) n skip)
+                        (adjust-expression-depth (WithContMark-body exp) n skip))]))
 
 

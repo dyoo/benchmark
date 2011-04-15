@@ -34,7 +34,8 @@
 
 
     var isPair = function(x) { return (typeof(x) == 'object' && 
-				       x.length === 2) };
+				       x.length === 2 &&
+				       x.type !== 'vector') };
     var isList = function(x) {
 	while (x !== NULL) {
 	    if (typeof(x) == 'object' && x.length === 2) {
@@ -47,7 +48,7 @@
     };
 
     var isVector = function(x) { return (typeof(x) == 'object' && 
-					 x.length !== undefined) };
+					 x.type === 'vector') };
 
     var Machine = function() {
 	this.callsBeforeTrampoline = 100;
@@ -55,7 +56,7 @@
 	this.proc = undefined;
 	this.argcount = undefined;
 	this.env = [];
-	this.control = [];     // Arrayof (U CallFrame PromptFrame)
+	this.control = [];     // Arrayof (U Frame CallFrame PromptFrame)
 	this.running = false;
 	this.params = { 'currentDisplayer': function(v) {},
 			
@@ -85,20 +86,52 @@
 
 
 
-    var Frame = function() {};
-    // Control stack elements:
 
-    // A CallFrame represents a call stack frame.
+
+
+    // A generic frame just holds marks.
+    var Frame = function() {
+	// The set of continuation marks.
+	this.marks = [];
+
+	// When we're in the middle of computing with-cont-mark, we
+	// stash the key in here temporarily.
+	this.pendingContinuationMarkKey = undefined;
+    };
+
+
+    // Frames must support marks and the temporary variables necessary to
+    // support with-continuation-mark and with-values.
+
+    // Specialized frames support more features:
+
+    // A CallFrame represents a call stack frame, and includes the return address
+    // as well as the function being called.
     var CallFrame = function(label, proc) {
 	this.label = label;
 	this.proc = proc;
+
+	// When we're in the middle of computing with-cont-mark, we
+	// stash the key in here temporarily.
+	this.pendingContinuationMarkKey = undefined;
+
+	// The set of continuation marks.
+	this.marks = [];
     };
     CallFrame.prototype = heir(Frame.prototype);
 
-    // PromptFrame represents a prompt frame.
+    // A prompt frame includes a return address, as well as a prompt tag
+    // for supporting delimited continuations.
     var PromptFrame = function(label, tag) {
 	this.label = label;
 	this.tag = tag; // ContinuationPromptTag
+
+	// The set of continuation marks.
+	this.marks = [];
+
+	// When we're in the middle of computing with-cont-mark, we
+	// stash the key in here temporarily.
+	this.pendingContinuationMarkKey = undefined;	
     };
     PromptFrame.prototype = heir(Frame.prototype);
 
@@ -183,33 +216,40 @@
     var NULL = [];
 
 
-    var raise = function(e) { throw e; }
-
+    var raise = function(MACHINE, e) { 
+	if (typeof(window.console) !== 'undefined' &&
+	    typeof(console.log) === 'function') {
+	    console.log(MACHINE);
+	    console.log(e);
+	} 
+	throw e; 
+    };
 
 
 
     // testArgument: (X -> boolean) X number string string -> boolean
     // Produces true if val is true, and otherwise raises an error.
-    var testArgument = function(expectedTypeName,
+    var testArgument = function(MACHINE,
+				expectedTypeName,
 				predicate, 			    
 				val, 
-				position, 
+				index, 
 				callerName) {
 	if (predicate(val)) {
 	    return true;
 	}
 	else {
-	    raise(new Error(callerName + ": expected " + expectedTypeName
-			    + " as argument #" + position 
-			    + " but received " + val + " instead"));
+	    raise(MACHINE, new Error(callerName + ": expected " + expectedTypeName
+				     + " as argument " + (index + 1)
+				     + " but received " + val));
 	}
     };
 
     var testArity = function(callerName, observed, minimum, maximum) {
 	if (observed < minimum || observed > maximum) {
-	    raise(new Error(callerName + ": expected at least " + minimum
-			    + " arguments "
-			    + " but received " + observer));
+	    raise(MACHINE, new Error(callerName + ": expected at least " + minimum
+				     + " arguments "
+				     + " but received " + observer));
 
 	}
     };
@@ -227,7 +267,7 @@
 					     MACHINE.control.length - skip);
 	    }
 	} 
-	raise(new Error("captureControl: unable to find tag " + tag));
+	raise(MACHINE, new Error("captureControl: unable to find tag " + tag));
     };
 
 
@@ -246,7 +286,7 @@
 		return;
 	    }
 	}
-	raise(new Error("restoreControl: unable to find tag " + tag));     
+	raise(MACHINE, new Error("restoreControl: unable to find tag " + tag));     
 
     };
 
@@ -320,7 +360,13 @@
     Primitives['display'] = function(MACHINE) {
 	var firstArg = MACHINE.env[MACHINE.env.length-1];
 	var outputPort = MACHINE.params.currentOutputPort;
-	if (MACHINE.argcount === 2) { 
+	if (MACHINE.argcount === 2) {
+	    testArgument(MACHINE,
+			 'isOutputPort', 
+			 isOutputPort, 
+			 MACHINE.env.length-2,
+			 1,
+			 'display');
 	    outputPort = MACHINE.env[MACHINE.env.length-2];
 	}
 	outputPort.write(MACHINE, firstArg);
@@ -332,6 +378,12 @@
     Primitives['newline'] = function(MACHINE) {
 	var outputPort = MACHINE.params.currentOutputPort;
 	if (MACHINE.argcount === 1) { 
+	    testArgument(MACHINE,
+			 'isOutputPort', 
+			 isOutputPort, 
+			 MACHINE.env.length-1,
+			 1,
+			 'newline');
 	    outputPort = MACHINE.env[MACHINE.env.length-1];
 	}
 	outputPort.write(MACHINE, "\n");
@@ -343,7 +395,13 @@
     Primitives['displayln'] = function(MACHINE){
 	var firstArg = MACHINE.env[MACHINE.env.length-1];
 	var outputPort = MACHINE.params.currentOutputPort;
-	if (MACHINE.argcount === 2) { 
+	if (MACHINE.argcount === 2) {
+	    testArgument(MACHINE,
+			 'isOutputPort', 
+			 isOutputPort, 
+			 MACHINE.env.length-2,
+			 1,
+			 'displayln'); 
 	    outputPort = MACHINE.env[MACHINE.env.length-2];
 	}
 	outputPort.write(MACHINE, firstArg);
@@ -358,9 +416,10 @@
 
     Primitives['='] = function(MACHINE) {
 	var firstArg = MACHINE.env[MACHINE.env.length-1];
-	testArgument('number', isNumber, firstArg, 0, '=');
-	for (var i = 1; i < MACHINE.argcount; i++) {
-	    testArgument('number',
+	testArgument(MACHINE, 'number', isNumber, firstArg, 0, '=');
+	for (var i = 0; i < MACHINE.argcount - 1; i++) {
+	    testArgument(MACHINE, 
+			 'number',
 			 isNumber, 
 			 MACHINE.env[MACHINE.env.length - 1 - i],
 			 i,
@@ -378,9 +437,11 @@
 
     Primitives['<'] = function(MACHINE) {
 	var firstArg = MACHINE.env[MACHINE.env.length-1];
-	testArgument('number', isNumber, firstArg, 0, '<');
-	for (var i = 1; i < MACHINE.argcount; i++) {
-	    testArgument('number',
+	testArgument(MACHINE,
+		     'number', isNumber, firstArg, 0, '<');
+	for (var i = 0; i < MACHINE.argcount - 1; i++) {
+	    testArgument(MACHINE, 
+			 'number',
 			 isNumber, 
 			 MACHINE.env[MACHINE.env.length - 1 - i],
 			 i,
@@ -397,9 +458,11 @@
 
     Primitives['>'] = function(MACHINE) {
 	var firstArg = MACHINE.env[MACHINE.env.length-1];
-	testArgument('number', isNumber, firstArg, 0, '>');
-	for (var i = 1; i < MACHINE.argcount; i++) {
-	    testArgument('number',
+	testArgument(MACHINE,
+		     'number', isNumber, firstArg, 0, '>');
+	for (var i = 0; i < MACHINE.argcount - 1; i++) {
+	    testArgument(MACHINE,
+			 'number',
 			 isNumber, 
 			 MACHINE.env[MACHINE.env.length - 1 - i],
 			 i,
@@ -416,9 +479,11 @@
 
     Primitives['<='] = function(MACHINE) {
 	var firstArg = MACHINE.env[MACHINE.env.length-1];
-	testArgument('number', isNumber, firstArg, 0, '<=');
-	for (var i = 1; i < MACHINE.argcount; i++) {
-	    testArgument('number',
+	testArgument(MACHINE,
+		     'number', isNumber, firstArg, 0, '<=');
+	for (var i = 0; i < MACHINE.argcount - 1; i++) {
+	    testArgument(MACHINE,
+			 'number',
 			 isNumber, 
 			 MACHINE.env[MACHINE.env.length - 1 - i],
 			 i,
@@ -436,9 +501,11 @@
 
     Primitives['>='] = function(MACHINE) {
 	var firstArg = MACHINE.env[MACHINE.env.length-1];
-	testArgument('number', isNumber, firstArg, 0, '>=');
-	for (var i = 1; i < MACHINE.argcount; i++) {
-	    testArgument('number',
+	testArgument(MACHINE,
+		     'number', isNumber, firstArg, 0, '>=');
+	for (var i = 0; i < MACHINE.argcount - 1; i++) {
+	    testArgument(MACHINE, 
+			 'number',
 			 isNumber, 
 			 MACHINE.env[MACHINE.env.length - 1 - i],
 			 i,
@@ -458,12 +525,12 @@
 	var result = 0;
 	var i = 0;
 	for (i=0; i < MACHINE.argcount; i++) {
-	    testArgument(
-		'number',
-		isNumber, 
-		MACHINE.env[MACHINE.env.length - 1 - i],
-		i,
-		'+');
+	    testArgument(MACHINE,
+			 'number',
+			 isNumber, 
+			 MACHINE.env[MACHINE.env.length - 1 - i],
+			 i,
+			 '+');
 	    result += MACHINE.env[MACHINE.env.length - 1 - i];
 	};
 	return result;
@@ -476,12 +543,12 @@
 	var result = 1;
 	var i = 0;
 	for (i=0; i < MACHINE.argcount; i++) {
-	    testArgument(
-		'number',
-		isNumber, 
-		MACHINE.env[MACHINE.env.length - 1 - i],
-		i,
-		'*');
+	    testArgument(MACHINE,
+			 'number',
+			 isNumber, 
+			 MACHINE.env[MACHINE.env.length - 1 - i],
+			 i,
+			 '*');
 	    result *= MACHINE.env[MACHINE.env.length - 1 - i];
 	}
 	return result;
@@ -491,7 +558,8 @@
     
     Primitives['-'] = function(MACHINE) {
 	if (MACHINE.argcount === 1) { 
-	    testArgument('number',
+	    testArgument(MACHINE,
+			 'number',
 			 isNumber,
 			 MACHINE.env[MACHINE.env.length-1],
 			 0,
@@ -500,7 +568,8 @@
 	}
 	var result = MACHINE.env[MACHINE.env.length - 1];
 	for (var i = 1; i < MACHINE.argcount; i++) {
-	    testArgument('number',
+	    testArgument(MACHINE,
+			 'number',
 			 isNumber,
 			 MACHINE.env[MACHINE.env.length-1-i],
 			 i,
@@ -513,13 +582,20 @@
     Primitives['-'].displayName = '-';
     
     Primitives['/'] = function(MACHINE) {
-	testArgument('number',
+	testArgument(MACHINE,
+		     'number',
 		     isNumber,
 		     MACHINE.env[MACHINE.env.length - 1],
 		     0,
 		     '/');
 	var result = MACHINE.env[MACHINE.env.length - 1];
 	for (var i = 1; i < MACHINE.argcount; i++) {
+	    testArgument(MACHINE,
+			 'number',
+			 isNumber,
+			 MACHINE.env[MACHINE.env.length-1-i],
+			 i,
+			 '/');
 	    result /= MACHINE.env[MACHINE.env.length - 1 - i];
 	}
 	return result;
@@ -549,7 +625,8 @@
     Primitives['list'].displayName = 'list';
 
     Primitives['car'] = function(MACHINE) {
-	testArgument('pair',
+	testArgument(MACHINE, 
+		     'pair',
 		     isPair,
 		     MACHINE.env[MACHINE.env.length - 1],
 		     0,
@@ -561,7 +638,8 @@
     Primitives['car'].displayName = 'car';
 
     Primitives['cdr'] = function(MACHINE) {
-	testArgument('pair',
+	testArgument(MACHINE,
+		     'pair',
 		     isPair,
 		     MACHINE.env[MACHINE.env.length - 1],
 		     0,
@@ -580,7 +658,8 @@
     Primitives['pair?'].displayName = 'pair?';
 
     Primitives['set-car!'] = function(MACHINE) {
-	testArgument('pair',
+	testArgument(MACHINE,
+		     'pair',
 		     isPair,
 		     MACHINE.env[MACHINE.env.length - 1],
 		     0,
@@ -593,7 +672,8 @@
     Primitives['set-car!'].displayName = 'set-car!';
 
     Primitives['set-cdr!'] = function(MACHINE) {
-	testArgument('pair',
+	testArgument(MACHINE,
+		     'pair',
 		     isPair,
 		     MACHINE.env[MACHINE.env.length - 1],
 		     0,
@@ -607,7 +687,7 @@
     
     Primitives['not'] = function(MACHINE) {
 	var firstArg = MACHINE.env[MACHINE.env.length-1];
-	return (!firstArg);
+	return (firstArg === false);
     };
     Primitives['not'].arity = 1;
     Primitives['not'].displayName = 'not';
@@ -622,7 +702,8 @@
     Primitives['null?'].displayName = 'null?';
 
     Primitives['add1'] = function(MACHINE) {
-	testArgument('number',
+	testArgument(MACHINE,
+		     'number',
 		     isNumber,
 		     MACHINE.env[MACHINE.env.length - 1],
 		     0,
@@ -634,7 +715,8 @@
     Primitives['add1'].displayName = 'add1';
 
     Primitives['sub1'] = function(MACHINE) {
-	testArgument('number',
+	testArgument(MACHINE,
+		     'number',
 		     isNumber,
 		     MACHINE.env[MACHINE.env.length - 1],
 		     0,
@@ -658,13 +740,15 @@
 	for (i = 0; i < MACHINE.argcount; i++) {
 	    result.push(MACHINE.env[MACHINE.env.length-1-i]);
 	}
+	result.type = 'vector';
 	return result;
     };
     Primitives['vector'].arity = new ArityAtLeast(0);
     Primitives['vector'].displayName = 'vector';
 
     Primitives['vector->list'] = function(MACHINE) {
-	testArgument('vector',
+	testArgument(MACHINE,
+		     'vector',
 		     isVector,
 		     MACHINE.env[MACHINE.env.length - 1],
 		     0,
@@ -687,13 +771,15 @@
 	    result.push(firstArg[0]);
 	    firstArg = firstArg[1];
 	}
+	result.type='vector';
 	return result;
     };
     Primitives['list->vector'].arity = 1;
     Primitives['list->vector'].displayName = 'list->vector';
 
     Primitives['vector-ref'] = function(MACHINE) {
-	testArgument('vector',
+	testArgument(MACHINE,
+		     'vector',
 		     isVector,
 		     MACHINE.env[MACHINE.env.length - 1],
 		     0,
@@ -706,7 +792,8 @@
     Primitives['vector-ref'].displayName = 'vector-ref';
 
     Primitives['vector-set!'] = function(MACHINE) {
-	testArgument('vector',
+	testArgument(MACHINE,
+		     'vector',
 		     isVector,
 		     MACHINE.env[MACHINE.env.length - 1],
 		     0,
@@ -722,7 +809,8 @@
 
 
     Primitives['vector-length'] = function(MACHINE) {
-	testArgument('vector',
+	testArgument(MACHINE,
+		     'vector',
 		     isVector,
 		     MACHINE.env[MACHINE.env.length - 1],
 		     0,
@@ -736,7 +824,8 @@
 
     Primitives['make-vector'] = function(MACHINE) {
 	var value = 0;
-	testArgument('natural',
+	testArgument(MACHINE,
+		     'natural',
 		     isNatural,
 		     MACHINE.env[MACHINE.env.length - 1],
 		     0,
@@ -749,6 +838,7 @@
 	for(var i = 0; i < length; i++) {
 	    arr[i] = value;
 	}
+	arr.type='vector';
 	return arr;
     };
     Primitives['make-vector'].arity = [1, [2, NULL]];
@@ -866,10 +956,10 @@
 	var originalLst = lst;
 	while (true) {
 	    if (! isList(lst)) {
-		raise(new Error("member: expected list" 
-				+ " as argument #2"
-				+ " but received " + originalLst + " instead"));
-	    };
+		raise(MACHINE, new Error("member: expected list" 
+					 + " as argument #2"
+					 + " but received " + originalLst + " instead"));
+	    }
 	    if (lst === NULL) {
 		return false;
 	    }
@@ -881,6 +971,28 @@
     };
     Primitives['member'].arity = 2;
     Primitives['member'].displayName = 'member';
+
+
+
+    Primitives['reverse'] = function(MACHINE) {
+	var rev = NULL;
+	var lst = MACHINE.env[MACHINE.env.length-1];
+	while(lst !== NULL) {
+	    testArgument(MACHINE,
+			 'pair', isPair, lst, 0, 'reverse');
+	    rev = [lst[0], rev];
+	    lst = lst[1];
+	}
+	return rev;
+    };
+    Primitives['reverse'].arity = 1;
+    Primitives['reverse'].displayName = 'reverse';
+
+
+
+
+
+
 
 
     // recomputeGas: state number -> number
@@ -899,17 +1011,6 @@
                      1);
     };
 
-    Primitives['reverse'] = function(MACHINE) {
-	var rev = NULL;
-	var lst = MACHINE.env[MACHINE.env.length-1];
-	while(lst !== NULL) {
-	    testArgument('pair', isPair, lst, 0, 'reverse');
-	    rev = [lst[0], rev];
-	    lst = lst[1];
-	}
-	return rev;
-    };
-    Primitives['reverse'].arity = 1;
 
 
 
@@ -956,6 +1057,7 @@
 
     // Exports
     exports['Machine'] = Machine;
+    exports['Frame'] = Frame;
     exports['CallFrame'] = CallFrame;
     exports['PromptFrame'] = PromptFrame;
     exports['Closure'] = Closure;

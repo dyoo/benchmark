@@ -2,6 +2,7 @@
 (require "simulator-structs.rkt"
          "il-structs.rkt"
          racket/math
+         racket/list
          (for-syntax racket/base))
 
 (provide lookup-primitive set-primitive!)
@@ -133,6 +134,74 @@
                          the-void-value))
 
 
+
+(define my-member (lambda (x l)
+                    (let loop ([l l])
+                      (cond
+                        [(null? l)
+                         #f]
+                        [(MutablePair? l)
+                         (cond
+                           [(equal? x (MutablePair-h l))
+                            l]
+                           [else
+                            (loop (MutablePair-t l))])]
+                        [else
+                         (error 'member "not a list: ~s" l)]))))
+
+(define my-reverse (lambda (l)
+                    (let loop ([l l]
+                               [acc null])
+                      (cond
+                        [(null? l)
+                         acc]
+                        [(MutablePair? l)
+                         (loop (MutablePair-t l)
+                               (make-MutablePair (MutablePair-h l) acc))]
+                        [else
+                         (error 'member "not a list: ~s" l)]))))
+
+
+
+
+(define current-continuation-marks   
+  (letrec ([f (case-lambda [(a-machine)
+                            (f a-machine default-continuation-prompt-tag-value)]
+                           [(a-machine tag)
+                            (make-ContinuationMarkSet
+                             (let loop ([frames (machine-control a-machine)])
+                               (cond
+                                 [(empty? frames)
+                                  empty]
+                                 [else
+                                  (append (hash-map (frame-marks (first frames))
+                                                    cons)
+                                          (if (eq? tag (frame-tag (first frames)))
+                                              empty
+                                              (loop (rest frames))))])))])])
+    (make-primitive-proc (lambda (machine . args) (apply f machine args))
+                         '(0 1)
+                         'current-continuation-marks)))
+                        
+
+(define continuation-mark-set->list
+  ;; not quite correct: ContinuationMarkSets need to preserve frame structure a bit more. 
+  ;; At the very least, we need to keep track of prompt tags somewhere.
+  (let ([f (lambda (a-machine mark-set key)
+             (let ([marks (ContinuationMarkSet-marks mark-set)])
+               (foldr make-MutablePair
+                      null
+                      (map cdr (filter (lambda (k+v)
+                                         (eq? (car k+v) key))
+                                       marks)))))])
+    (make-primitive-proc (lambda (machine . args) (apply f machine args))
+                         '2 ;; fixme: should deal with prompt tags too
+                         'current-continuation-marks)))
+
+
+
+
+
 (define lookup-primitive (make-lookup #:functions (+ - * / = < <= > >= 
                                                      sub1
                                                      not
@@ -161,7 +230,8 @@
                                                      (my-pair? pair?)
                                                      (my-set-car! set-car!)
                                                      (my-set-cdr! set-cdr!)
-                                                     
+                                                     (my-member member)
+                                                     (my-reverse reverse)
                                                      
                                                      
                                                      (my-box box)
@@ -173,7 +243,8 @@
                                                      vector-ref
                                                      (my-vector->list vector->list)
                                                      (my-list->vector list->vector)
-                                                     
+                                                     vector-length
+                                                     make-vector
                                                      
                                                      
                                                      equal?
@@ -182,6 +253,8 @@
                                                     
                                                      
                                                      symbol?)
-                                      #:constants (null pi e)))
+                                      #:constants (null pi e
+                                                        current-continuation-marks
+                                                        continuation-mark-set->list)))
 
 

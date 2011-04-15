@@ -109,14 +109,15 @@
                      (step-push-environment! m i)]
                     [(PushImmediateOntoEnvironment? i)
                      (step-push-immediate-onto-environment! m i)]
-                    [(PushControlFrame? i)
+                    [(PushControlFrame/Generic? i)
+                     (step-push-control-frame/generic! m i)]
+                    [(PushControlFrame/Call? i)
                      (step-push-control-frame! m i)]
                     [(PushControlFrame/Prompt? i)
                      (step-push-control-frame/prompt! m i)]
                     [(PopControlFrame? i)
                      (step-pop-control-frame! m i)]
-                    [(PopControlFrame/Prompt? i)
-                     (step-pop-control-frame! m i)])])
+                    )])
          (increment-pc! m)))
 
 
@@ -169,10 +170,20 @@
     (step-push-environment! m (make-PushEnvironment 1 (PushImmediateOntoEnvironment-box? stmt)))
     ((get-target-updater t) m v)))
 
-(: step-push-control-frame! (machine PushControlFrame -> 'ok))
+
+
+(: step-push-control-frame/generic! (machine PushControlFrame/Generic -> 'ok))
+(define (step-push-control-frame/generic! m stmt)
+  (control-push! m (make-GenericFrame (make-hasheq)
+                                      (make-hasheq))))
+
+
+(: step-push-control-frame! (machine PushControlFrame/Call -> 'ok))
 (define (step-push-control-frame! m stmt)
-  (control-push! m (make-CallFrame (PushControlFrame-label stmt)
-                                   (ensure-closure-or-false (machine-proc m)))))
+  (control-push! m (make-CallFrame (PushControlFrame/Call-label stmt)
+                                   (ensure-closure-or-false (machine-proc m))
+                                   (make-hasheq)
+                                   (make-hasheq))))
 
 (: step-push-control-frame/prompt! (machine PushControlFrame/Prompt -> 'ok))
 (define (step-push-control-frame/prompt! m stmt)
@@ -184,11 +195,13 @@
                         [(OpArg? tag)
                          (ensure-continuation-prompt-tag-value (evaluate-oparg m tag))]))
                     (PushControlFrame/Prompt-label stmt)
-                    (length (machine-env m)))))
-                        
-  
+                    (length (machine-env m))
+                    (make-hasheq)
+                    (make-hasheq))))
 
-(: step-pop-control-frame! (machine (U PopControlFrame PopControlFrame/Prompt) -> 'ok))
+
+
+(: step-pop-control-frame! (machine (U PopControlFrame) -> 'ok))
 (define (step-pop-control-frame! m stmt)
   (let: ([l : Symbol (control-pop! m)])
         'ok))
@@ -359,7 +372,18 @@
           [(RestoreEnvironment!? op)
            (set-machine-env! m (CapturedEnvironment-vals (ensure-CapturedEnvironment (env-ref m 1))))
            (set-machine-stack-size! m (length (machine-env m)))
-           'ok])))
+           'ok]
+          
+          [(InstallContinuationMarkEntry!? op)
+           (let* ([a-frame (control-top m)]
+                  [key (hash-ref (frame-temps a-frame) 'pendingContinuationMarkKey)]
+                  [val (machine-val m)]
+                  [marks (frame-marks a-frame)])
+             (hash-set! marks 
+                        (ensure-primitive-value key)
+                        (ensure-primitive-value val))
+             'ok)]
+          )))
 
 
 
@@ -433,7 +457,15 @@
      (lambda: ([m : machine] [v : SlotValue])
               (set-primitive! (PrimitivesReference-name t)
                               (ensure-primitive-value v))
-              'ok)]))
+              'ok)]
+    [(ControlFrameTemporary? t)
+     (lambda: ([m : machine] [v : SlotValue])
+              (let ([ht (frame-temps (control-top m))])
+                (hash-set! ht
+                           (ControlFrameTemporary-name t)
+                           (ensure-primitive-value v))
+                'ok))]))
+
 
 
 (: step-assign-primitive-operation! (machine AssignPrimOpStatement -> 'ok))
@@ -482,6 +514,8 @@
           [(GetControlStackLabel? op)
            (target-updater! m (let ([frame (ensure-frame (first (machine-control m)))])
                                 (cond
+                                  [(GenericFrame? frame)
+                                   (error 'GetControlStackLabel)]
                                   [(PromptFrame? frame)
                                    (let ([label (PromptFrame-return frame)])
                                      (cond
@@ -500,6 +534,8 @@
           [(GetControlStackLabel/MultipleValueReturn? op)
            (target-updater! m (let ([frame (ensure-frame (first (machine-control m)))])
                                 (cond
+                                  [(GenericFrame? frame)
+                                   (error 'GetControlStackLabel/MultipleValueReturn)]
                                   [(PromptFrame? frame)
                                    (let ([label (PromptFrame-return frame)])
                                      (cond
@@ -551,6 +587,8 @@
     [else
      (let ([a-frame (first frames)])
        (cond
+         [(GenericFrame? a-frame)
+          (cons a-frame (take-continuation-to-tag (rest frames) tag))]
          [(CallFrame? a-frame)
           (cons a-frame (take-continuation-to-tag (rest frames) tag))]
          [(PromptFrame? a-frame)
@@ -570,6 +608,8 @@
     [else
      (let ([a-frame (first frames)])
        (cond
+         [(GenericFrame? a-frame)
+          (drop-continuation-to-tag (rest frames) tag)]
          [(CallFrame? a-frame)
           (drop-continuation-to-tag (rest frames) tag)]
          [(PromptFrame? a-frame)
@@ -717,7 +757,7 @@
 (define (ensure-closure-or-false v)
   (if (or (closure? v) (eq? v #f))
       v
-      (error 'ensure-closure)))
+      (error 'ensure-closure-or-false)))
 
 (: ensure-closure (SlotValue -> closure))
 (define (ensure-closure v)
