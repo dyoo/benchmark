@@ -89,6 +89,12 @@
          [(EnvPrefixReference? address)
           (make-ToplevelRef (EnvPrefixReference-depth address)
                             (EnvPrefixReference-pos address))]))]
+
+    [(define-values? exp)
+     (make-DefValues (map (lambda (id) 
+                            (parse id cenv #f))
+                          (define-values-ids exp))
+                     (parse (define-values-rhs exp) cenv #f))]
     
     [(definition? exp)
      (let ([address (find-variable (definition-variable exp) cenv)])
@@ -112,6 +118,9 @@
     
     [(lambda? exp)
      (parse-lambda exp cenv)]
+    
+    [(case-lambda? exp)
+     (parse-case-lambda exp cenv)]
     
     [(begin? exp)
      (let ([actions (map (lambda (e)
@@ -137,7 +146,8 @@
        ;; extent of the set!-value.
        (make-Seq (list (cond
                          [(EnvLexicalReference? address)
-                          (make-InstallValue (EnvLexicalReference-depth address)
+                          (make-InstallValue 1
+                                             (EnvLexicalReference-depth address)
                                              (parse (set!-value exp) cenv #f)
                                              #t)]
                          [(EnvPrefixReference? address)
@@ -151,7 +161,9 @@
      (make-WithContMark (parse (with-continuation-mark-key exp) cenv #f)
                         (parse (with-continuation-mark-value exp) cenv #f)
                         (parse (with-continuation-mark-body exp) cenv #f))]
-                        
+
+    [(call-with-values? exp)
+     (parse-call-with-values exp cenv)]
 
     ;; Remember, this needs to be the last case.
     [(application? exp)
@@ -214,6 +226,23 @@
       (string->symbol (format "lamEntry~a" lam-label-counter))))
 
 
+
+(define (parse-case-lambda exp cenv)
+  (let* ([entry-label (fresh-lam-label)]
+         [parsed-lams (map (lambda (lam)
+                             (parse-lambda lam cenv))
+                           (case-lambda-clauses exp))])
+    (make-CaseLam (current-defined-name)
+                  parsed-lams
+                  entry-label)))
+
+
+
+
+
+
+
+
 (define (seq codes)
   (cond
     [(= 1 (length codes))
@@ -239,6 +268,10 @@
        [(variable? exp)
         (list exp)]
        
+       [(define-values? exp)
+        (append (define-values-ids exp)
+                (loop (define-values-rhs exp)))]
+       
        [(definition? exp)
         (cons (definition-variable exp)
               (loop (definition-value exp)))]
@@ -254,6 +287,9 @@
        [(lambda? exp)
         (list-difference (apply append (map loop (lambda-body exp)))
                          (lambda-parameters exp))]
+       
+       [(case-lambda? exp)
+        (apply append (map loop (case-lambda-clauses exp)))]
        
        [(begin? exp)
         (apply append (map loop (begin-actions exp)))]
@@ -282,6 +318,10 @@
         (append (loop (with-continuation-mark-key exp))
                 (loop (with-continuation-mark-value exp))
                 (loop (with-continuation-mark-body exp)))]
+      
+       [(call-with-values? exp)
+        (append (loop (call-with-values-producer exp))
+                (loop (call-with-values-consumer exp)))]
 
        ;; Remember: this needs to be the last case.
        [(application? exp)
@@ -308,6 +348,9 @@
        [(variable? exp)
         '()]
        
+       [(define-values? exp)
+        (loop (define-values-rhs exp))]
+       
        [(definition? exp)
         (loop (definition-value exp))]
        
@@ -322,6 +365,9 @@
        [(lambda? exp)
         (list-difference (loop (lambda-body exp))
                          (lambda-parameters exp))]
+       
+       [(case-lambda? exp)
+        (apply append (map loop (case-lambda-clauses exp)))]
        
        [(begin? exp)
         (apply append (map loop (begin-actions exp)))]
@@ -350,6 +396,10 @@
         (append (loop (with-continuation-mark-key exp))
                 (loop (with-continuation-mark-value exp))
                 (loop (with-continuation-mark-body exp)))]
+       
+       [(call-with-values? exp)
+        (append (loop (call-with-values-producer exp))
+                (loop (call-with-values-consumer exp)))]
        
        ;; Remember, this needs to be the last case.
        [(application? exp)
@@ -387,6 +437,18 @@
   (tagged-list? exp 'set!))
 (define (assignment-variable exp) (cadr exp))
 (define (assignment-value exp) (caddr exp))
+
+
+
+(define (define-values? exp)
+  (tagged-list? exp 'define-values))
+
+(define (define-values-ids exp)
+  (cadr exp))
+
+(define (define-values-rhs exp)
+  (caddr exp))
+
 
 (define (definition? exp)
   (tagged-list? exp 'define))
@@ -431,6 +493,18 @@
 
 (define (make-lambda parameters body)
   (cons 'lambda (cons parameters body)))
+
+
+
+
+(define (case-lambda? exp)
+  (tagged-list? exp 'case-lambda))
+
+(define (case-lambda-clauses exp)
+  (map (lambda (a-clause)
+         `(lambda ,@a-clause))
+       (cdr exp)))
+
 
 (define (if? exp)
   (tagged-list? exp 'if))
@@ -524,7 +598,8 @@
          (make-LetVoid (length vars)
                        (seq (append 
                              (map (lambda (var rhs index) 
-                                    (make-InstallValue index 
+                                    (make-InstallValue 1
+                                                       index 
                                                        (parameterize ([current-defined-name var])
                                                          (parse rhs rhs-cenv #f))
                                                        any-mutated?))
@@ -571,7 +646,8 @@
          (make-LetVoid (length vars)
                        (seq (append 
                              (map (lambda (var rhs index) 
-                                    (make-InstallValue (- n 1 index)
+                                    (make-InstallValue 1
+                                                       (- n 1 index)
                                                        (parameterize ([current-defined-name var])
                                                          (parse rhs new-cenv #f))
                                                        #t))
@@ -580,6 +656,26 @@
                                   (build-list (length rhss) (lambda (i) i)))
                              (list (parse `(begin ,@body) new-cenv #f))))
                        #t))])))
+
+
+
+(define (parse-call-with-values exp cenv)
+  (cond
+    [(and (lambda? (call-with-values-producer exp))
+          (empty? (lambda-parameters (call-with-values-producer exp))))
+     (let ([producer (parse `(begin ,@(lambda-body (call-with-values-producer exp)))
+                            cenv #f)]
+           [consumer-proc (parse (call-with-values-consumer exp) cenv #f)])
+              (make-ApplyValues consumer-proc producer))]
+    [else
+     (let ([producer (parse `(,(call-with-values-producer exp)) cenv #f)]
+           [consumer-proc (parse (call-with-values-consumer exp) cenv #f)])
+       (make-ApplyValues consumer-proc producer))]))
+
+
+
+
+
 
 
 (define (desugar-let* exp)
@@ -604,6 +700,7 @@
 
 
 
+
 (define (named-let? exp)
   (and (tagged-list? exp 'let)
        (symbol? (cadr exp))))
@@ -621,6 +718,13 @@
 (define (named-let-body exp)
   (cdddr exp))
 
+
+(define (call-with-values? exp)
+  (tagged-list? exp 'call-with-values))
+(define (call-with-values-producer exp)
+  (cadr exp))
+(define (call-with-values-consumer exp)
+  (caddr exp))
 
 
 ;; any -> boolean

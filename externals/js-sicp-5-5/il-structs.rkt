@@ -27,7 +27,10 @@
                       EnvPrefixReference  ;; a reference into an element in the toplevel.
                       EnvWholePrefixReference ;; a reference into a toplevel prefix in the stack.
                       SubtractArg
-                      ))
+		      ControlStackLabel
+		      ControlStackLabel/MultipleValueReturn
+                      CompiledProcedureEntry
+                      ControlFrameTemporary))
 
 
 ;; Targets: these are the allowable lhs's for an assignment.
@@ -39,7 +42,9 @@
 
 
 ;; When we need to store a value temporarily in the top control frame, we can use this as a target.
-(define-struct: ControlFrameTemporary ([name : (U 'pendingContinuationMarkKey)])
+(define-struct: ControlFrameTemporary ([name : (U 'pendingContinuationMarkKey ;; for continuation marks
+                                                  'pendingApplyValuesProc ;; for apply-values
+                                                  )])
   #:transparent)
 
 
@@ -55,6 +60,24 @@
 (define-struct: SubtractArg ([lhs : OpArg]
                              [rhs : OpArg])
   #:transparent)
+
+
+;; Gets the return address embedded at the top of the control stack.
+(define-struct: ControlStackLabel ()
+  #:transparent)
+
+;; Gets the secondary (mulitple-value-return) return address embedded
+;; at the top of the control stack.
+(define-struct: ControlStackLabel/MultipleValueReturn ()
+  #:transparent)
+
+;; Get the entry point of a compiled procedure.
+(define-struct: CompiledProcedureEntry ([proc : OpArg])
+  #:transparent)
+
+
+
+
 
 
 
@@ -132,11 +155,11 @@
 ;; Adding a frame for getting back after procedure application.
 ;; The 'proc register must hold either #f or a closure at the time of
 ;; this call, as the control frame will hold onto the called procedure record.
-(define-struct: PushControlFrame/Call ([label : (U Symbol LinkedLabel)]) 
+(define-struct: PushControlFrame/Call ([label : LinkedLabel]) 
   #:transparent)
 
 (define-struct: PushControlFrame/Prompt ([tag : (U OpArg DefaultContinuationPromptTag)]
-                                         [label : (U Symbol LinkedLabel)]
+                                         [label : LinkedLabel]
                                          ;; TODO: add handler and arguments
                                          )
   #:transparent)
@@ -149,14 +172,15 @@
 
 
 
-(define-struct: GotoStatement ([target : (U Label Reg)]) 
+(define-struct: GotoStatement ([target : OpArg]) 
   #:transparent)
 
 (define-struct: PerformStatement ([op : PrimitiveCommand])
   #:transparent)
 
+
+
 (define-struct: TestAndBranchStatement ([op : PrimitiveTest]
-                                        [register : AtomicRegisterSymbol]
                                         [label : Symbol])
   #:transparent)
 
@@ -171,12 +195,8 @@
                                   MakeCompiledProcedure
                                   MakeCompiledProcedureShell
                                   ApplyPrimitiveProcedure
-
-                                  ;; Gets at the single-value-return address.
-                                  GetControlStackLabel
-                                  ;; Gets at the multiple-value-return address.
-                                  GetControlStackLabel/MultipleValueReturn
                                   
+
                                   MakeBoxedEnvironmentValue
 
                                   CaptureEnvironment
@@ -196,6 +216,7 @@
                                        [closed-vals : (Listof Natural)]
                                        [display-name : (U Symbol False)])
   #:transparent)
+
 
 ;; Constructs a closure shell.  Like MakeCompiledProcedure, but doesn't
 ;; bother with trying to capture the free variables.
@@ -227,12 +248,6 @@
 
 
 
-;; Gets the return address embedded at the top of the control stack.
-(define-struct: GetControlStackLabel ()
-  #:transparent)
-(define-struct: GetControlStackLabel/MultipleValueReturn ()
-  #:transparent)
-
 
 (define-struct: MakeBoxedEnvironmentValue ([depth : Natural])
   #:transparent)
@@ -249,20 +264,20 @@
 
 
 
-;; The following is used with TestStatement: each is passed the register-rand and
-;; is expected to
+;; Primitive tests (used with TestAndBranch)
 (define-type PrimitiveTest (U 
-                            ;; register -> boolean
-                            ;; Meant to branch when the register value is false.
-                            'false?
-
-                            'one?
-                            
-                            ;; register -> boolean
-                            ;; Meant to branch when the register value is a primitive
-                            ;; procedure
-                            'primitive-procedure?
+                            TestFalse
+                            TestOne
+                            TestZero
+                            TestPrimitiveProcedure
+                            TestClosureArityMismatch
                             ))
+(define-struct: TestFalse ([operand : OpArg]) #:transparent)
+(define-struct: TestOne ([operand : OpArg]) #:transparent)
+(define-struct: TestZero ([operand : OpArg]) #:transparent)
+(define-struct: TestPrimitiveProcedure ([operand : OpArg]) #:transparent)
+(define-struct: TestClosureArityMismatch ([closure : OpArg]
+                                          [n : OpArg]) #:transparent)
 
 
 
@@ -314,6 +329,27 @@
                                      [closed-vals : (Listof Natural)])
   #:transparent)
 
+;; Raises an exception that says that we expected a number of values.
+;; Assume that argcount is not equal to expected.
+(define-struct: RaiseContextExpectedValuesError! ([expected : Natural])
+  #:transparent)
+
+
+;; Raises an exception that says that we're doing a
+;; procedure application, but got sent an incorrect number.
+(define-struct: RaiseArityMismatchError! ([expected : Arity]
+					  [received : OpArg])
+  #:transparent)
+
+
+;; Raises an exception that says that we're doing a
+;; procedure application, but got sent an incorrect number.
+(define-struct: RaiseOperatorApplicationError! ([operator : OpArg])
+  #:transparent)
+
+
+
+
 ;; Changes over the control located at the given argument from the structure in env[1]
 (define-struct: RestoreControl! ([tag : (U DefaultContinuationPromptTag OpArg)]) #:transparent)
 
@@ -338,6 +374,10 @@
                                SetFrameCallee!
                                SpliceListIntoStack!
                                UnspliceRestFromStack!
+                            
+                               RaiseContextExpectedValuesError!
+                               RaiseArityMismatchError!
+			       RaiseOperatorApplicationError!
                                
                                RestoreEnvironment!
                                RestoreControl!))
@@ -370,26 +410,40 @@
 
 
 
+;; A ValuesContext describes if a context either
+;;    * accepts any number multiple values by dropping them from the stack.
+;;    * accepts any number of multiple values by maintaining them on the stack.
+;;    * accepts exactly n values, erroring out
+(define-type ValuesContext (U 'tail
+                              'drop-multiple 
+                              'keep-multiple
+			      Natural))
 
 
 ;; Linkage
-(define-struct: NextLinkage ())
-(define next-linkage (make-NextLinkage))
+(define-struct: NextLinkage ([context : ValuesContext]))
+(define next-linkage/drop-multiple (make-NextLinkage 'drop-multiple))
+(define next-linkage/expects-single (make-NextLinkage 1))
+(define next-linkage/keep-multiple-on-stack (make-NextLinkage 'keep-multiple))
 
-(define-struct: ReturnLinkage ())
-(define return-linkage (make-ReturnLinkage))
 
-(define-struct: PromptLinkage ())
-(define prompt-linkage (make-PromptLinkage))
 
-(define-struct: LabelLinkage ([label : Symbol]))
+;; LabelLinkage is a labeled GOTO.
+(define-struct: LabelLinkage ([label : Symbol]
+			      [context : ValuesContext]))
+
+
+
+;; Both ReturnLinkage and ReturnLinkage/NonTail deal with multiple
+;; values indirectly, through the alternative multiple-value-return
+;; address in the LinkedLabel of their call frame.
+(define-struct: ReturnLinkage ([tail? : Boolean]))
+(define return-linkage (make-ReturnLinkage #t))
+(define return-linkage/nontail (make-ReturnLinkage #f))
 
 (define-type Linkage (U NextLinkage
-                        ReturnLinkage
-                        PromptLinkage
-                        LabelLinkage))
-
-
+                        LabelLinkage
+                        ReturnLinkage))
 
 
 
@@ -421,21 +475,13 @@
 
 
 
-
-;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
-;; Assembly
-
-(define-struct: BasicBlock ([name : Symbol] 
-                            [stmts : (Listof UnlabeledStatement)]) 
-  #:transparent)
-
-
-
-(define-type Arity (U Natural ArityAtLeast (Listof (U Natural ArityAtLeast))))
+;; Arity
+(define-type Arity (U AtomicArity (Listof (U AtomicArity))))
+(define-type AtomicArity (U Natural ArityAtLeast))
 (define-struct: ArityAtLeast ([value : Natural])
   #:transparent)
-
-(define-predicate listof-atomic-arity? (Listof (U Natural ArityAtLeast)))
+(define-predicate AtomicArity? AtomicArity)
+(define-predicate listof-atomic-arity? (Listof AtomicArity))
 
 
 

@@ -61,7 +61,7 @@
                                  ,(make-PerformStatement 
                                    (make-RestoreControl! default-continuation-prompt-tag))
                                  ,(make-PerformStatement (make-RestoreEnvironment!))
-                                 ,(make-AssignPrimOpStatement 'proc (make-GetControlStackLabel))
+                                 ,(make-AssignImmediateStatement 'proc (make-ControlStackLabel))
                                  ,(make-PopControlFrame)
                                  ,(make-GotoStatement (make-Reg 'proc)))))))
 
@@ -69,7 +69,7 @@
 (define (make-bootstrapped-primitive-code name src)
   (parameterize ([current-defined-name name])
     (append
-     (compile (parse src) (make-PrimitivesReference name) next-linkage))))
+     (compile (parse src) (make-PrimitivesReference name) next-linkage/drop-multiple))))
 
 
 
@@ -166,31 +166,45 @@
   
    
    ;; values
+   ;; values simply keeps all (but the first) value on the stack, preserves the argcount, and does a return
+   ;; to the multiple-value-return address.
    (let ([after-values-body-defn (make-label 'afterValues)]
          [values-entry (make-label 'valuesEntry)]
+         [on-zero-values (make-label 'onZeroValues)]
          [on-single-value (make-label 'onSingleValue)])
      `(,(make-GotoStatement (make-Label after-values-body-defn))
        ,values-entry
-       ,(make-TestAndBranchStatement 'one? 'argcount on-single-value)
-       ;; values simply keeps the values on the stack, preserves the argcount, and does a return
-       ;; to the multiple-value-return address.
-       ,(make-AssignPrimOpStatement 'proc (make-GetControlStackLabel/MultipleValueReturn))
-       ,(make-PopControlFrame)
-       ,(make-GotoStatement (make-Reg 'proc))
-       ,on-single-value
-       ,(make-AssignPrimOpStatement 'proc (make-GetControlStackLabel))
+       ,(make-TestAndBranchStatement (make-TestOne (make-Reg 'argcount)) on-single-value)
+       ,(make-TestAndBranchStatement (make-TestZero (make-Reg 'argcount)) on-zero-values)
+
+       ;; Common case: we're running multiple values.  Put the first in the val register
+       ;; and go to the multiple value return.
+       ,(make-AssignImmediateStatement 'proc (make-ControlStackLabel/MultipleValueReturn))
        ,(make-AssignImmediateStatement 'val (make-EnvLexicalReference 0 #f))
        ,(make-PopEnvironment (make-Const 1) (make-Const 0))
        ,(make-PopControlFrame)
        ,(make-GotoStatement (make-Reg 'proc))
-       
+
+       ;; Special case: on a single value, just use the regular return address
+       ,on-single-value
+       ,(make-AssignImmediateStatement 'proc (make-ControlStackLabel))
+       ,(make-AssignImmediateStatement 'val (make-EnvLexicalReference 0 #f))
+       ,(make-PopEnvironment (make-Const 1) (make-Const 0))
+       ,(make-PopControlFrame)
+       ,(make-GotoStatement (make-Reg 'proc))
+
+       ;; On zero values, leave things be and just return.
+       ,on-zero-values
+       ,(make-AssignImmediateStatement 'proc (make-ControlStackLabel/MultipleValueReturn))
+       ,(make-PopControlFrame)
+       ,(make-GotoStatement (make-Reg 'proc))
        
        ,after-values-body-defn
        ,(make-AssignPrimOpStatement (make-PrimitivesReference 'values)
                                     (make-MakeCompiledProcedure values-entry
                                                                 (make-ArityAtLeast 0) 
                                                                 '() 
-                                                                'values))))  
+                                                                'values))))
    
    
    

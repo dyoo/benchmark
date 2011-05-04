@@ -167,34 +167,34 @@
 ;; PushControl
 (let ([m (new-machine `(,(make-AssignImmediateStatement 'proc (make-Const #f))
                         foo 
-                        ,(make-PushControlFrame/Call 'foo)
+                        ,(make-PushControlFrame/Call (make-LinkedLabel 'foo 'foo))
                         bar
-                        ,(make-PushControlFrame/Call 'bar)
+                        ,(make-PushControlFrame/Call (make-LinkedLabel 'bar 'bar))
                         baz
                         ))])
   (test (machine-control (run! m))
-        (list (make-CallFrame 'bar #f (make-hasheq) (make-hasheq))
-              (make-CallFrame 'foo #f (make-hasheq) (make-hasheq)))))
+        (list (make-CallFrame (make-LinkedLabel 'bar 'bar) #f (make-hasheq) (make-hasheq))
+              (make-CallFrame (make-LinkedLabel 'foo 'foo) #f (make-hasheq) (make-hasheq)))))
 
 
 
 ;; PopControl
 (let ([m (new-machine `(,(make-AssignImmediateStatement 'proc (make-Const #f))
                         foo 
-                        ,(make-PushControlFrame/Call 'foo)
+                        ,(make-PushControlFrame/Call (make-LinkedLabel 'foo 'foo))
                         bar
-                        ,(make-PushControlFrame/Call 'bar)
+                        ,(make-PushControlFrame/Call (make-LinkedLabel 'bar 'bar))
                         baz
                         ,(make-PopControlFrame)
                         ))])
   (test (machine-control (run! m))
-        (list (make-CallFrame 'foo #f (make-hasheq) (make-hasheq)))))
+        (list (make-CallFrame (make-LinkedLabel 'foo 'foo) #f (make-hasheq) (make-hasheq)))))
 
 (let ([m (new-machine `(,(make-AssignImmediateStatement 'proc (make-Const #f))
                         foo 
-                        ,(make-PushControlFrame/Call 'foo)
+                        ,(make-PushControlFrame/Call (make-LinkedLabel 'foo 'foo))
                         bar
-                        ,(make-PushControlFrame/Call 'bar)
+                        ,(make-PushControlFrame/Call (make-LinkedLabel 'bar 'bar))
                         baz
                         ,(make-PopControlFrame)
                         ,(make-PopControlFrame)))])
@@ -207,7 +207,7 @@
 
 ;; TestAndBranch: try the true branch
 (let ([m (new-machine `(,(make-AssignImmediateStatement 'val (make-Const 42))
-                        ,(make-TestAndBranchStatement 'false? 'val 'on-false)
+                        ,(make-TestAndBranchStatement (make-TestFalse (make-Reg 'val)) 'on-false)
                         ,(make-AssignImmediateStatement 'val (make-Const 'ok))
                         ,(make-GotoStatement (make-Label 'end))
                         on-false
@@ -217,7 +217,7 @@
         'ok))
 ;; TestAndBranch: try the false branch
 (let ([m (new-machine `(,(make-AssignImmediateStatement 'val (make-Const #f))
-                        ,(make-TestAndBranchStatement 'false? 'val 'on-false)
+                        ,(make-TestAndBranchStatement (make-TestFalse (make-Reg 'val)) 'on-false)
                         ,(make-AssignImmediateStatement 'val (make-Const 'not-ok))
                         ,(make-GotoStatement (make-Label 'end))
                         on-false
@@ -227,7 +227,7 @@
         'ok))
 ;; Test for primitive procedure
 (let ([m (new-machine `(,(make-AssignImmediateStatement 'val (make-Const '+))
-                        ,(make-TestAndBranchStatement 'primitive-procedure? 'val 'on-true)
+                        ,(make-TestAndBranchStatement (make-TestPrimitiveProcedure (make-Reg 'val)) 'on-true)
                         ,(make-AssignImmediateStatement 'val (make-Const 'ok))
                         ,(make-GotoStatement (make-Label 'end))
                         on-true
@@ -237,7 +237,7 @@
         'ok))
 ;; Give a primitive procedure in val
 (let ([m (new-machine `(,(make-AssignImmediateStatement 'val (make-Const (lookup-primitive '+)))
-                        ,(make-TestAndBranchStatement 'primitive-procedure? 'val 'on-true)
+                        ,(make-TestAndBranchStatement (make-TestPrimitiveProcedure (make-Reg 'val)) 'on-true)
                         ,(make-AssignImmediateStatement 'val (make-Const 'not-ok))
                         ,(make-GotoStatement (make-Label 'end))
                         on-true
@@ -247,7 +247,7 @@
         'ok))
 ;; Give a primitive procedure in proc, but test val
 (let ([m (new-machine `(,(make-AssignImmediateStatement 'proc (make-Const (lookup-primitive '+)))
-                        ,(make-TestAndBranchStatement 'primitive-procedure? 'val 'on-true)
+                        ,(make-TestAndBranchStatement (make-TestPrimitiveProcedure (make-Reg 'val)) 'on-true)
                         ,(make-AssignImmediateStatement 'val (make-Const 'not-a-procedure))
                         ,(make-GotoStatement (make-Label 'end))
                         on-true
@@ -257,7 +257,7 @@
         'not-a-procedure))
 ;; Give a primitive procedure in proc and test proc
 (let ([m (new-machine `(,(make-AssignImmediateStatement 'proc (make-Const (lookup-primitive '+)))
-                        ,(make-TestAndBranchStatement 'primitive-procedure? 'proc 'on-true)
+                        ,(make-TestAndBranchStatement (make-TestPrimitiveProcedure (make-Reg 'proc)) 'on-true)
                         ,(make-AssignImmediateStatement 'val (make-Const 'not-a-procedure))
                         ,(make-GotoStatement (make-Label 'end))
                         on-true
@@ -485,13 +485,73 @@
         (list 126389 42 (make-toplevel '(+) (list (lookup-primitive '+))))))
 
 
-;; GetControlStackLabel
+;; ControlStackLabel
 (let ([m (new-machine `(,(make-AssignImmediateStatement 'proc (make-Const #f))
                         foo
-                        ,(make-PushControlFrame/Call 'foo)
-                        ,(make-AssignPrimOpStatement 'proc (make-GetControlStackLabel))))])
+                        ,(make-PushControlFrame/Call (make-LinkedLabel 'foo 'foo))
+                        ,(make-AssignImmediateStatement 'proc (make-ControlStackLabel))))])
   (test (machine-proc (run! m))
         'foo))
+
+
+;; ControlStackLabel
+(let ([m (new-machine `(,(make-AssignImmediateStatement 'proc (make-Const #f))
+                        ,(make-PushControlFrame/Call (make-LinkedLabel 'foo-single 'foo-multiple))
+                        ,(make-AssignImmediateStatement 'proc (make-ControlStackLabel))
+                        ,(make-GotoStatement (make-Reg 'proc))
+                        foo-single
+                        ,(make-AssignImmediateStatement 'val (make-Const "single"))
+                        ,(make-GotoStatement (make-Label 'end))
+                        foo-multiple
+                        ,(make-AssignImmediateStatement 'val (make-Const "multiple"))
+                        ,(make-GotoStatement (make-Label 'end))
+                        end))])
+  (test (machine-val (run! m))
+        "single"))
+(let ([m (new-machine `(,(make-AssignImmediateStatement 'proc (make-Const #f))
+                        ,(make-PushControlFrame/Call (make-LinkedLabel 'foo-single 'foo-multiple))
+                        ,(make-AssignImmediateStatement 'proc (make-ControlStackLabel/MultipleValueReturn))
+                        ,(make-GotoStatement (make-Reg 'proc))
+                        foo-single
+                        ,(make-AssignImmediateStatement 'val (make-Const "single"))
+                        ,(make-GotoStatement (make-Label 'end))
+                        foo-multiple
+                        ,(make-AssignImmediateStatement 'val (make-Const "multiple"))
+                        ,(make-GotoStatement (make-Label 'end))
+                        end))])
+  (test (machine-val (run! m))
+        "multiple"))
+
+
+(let ([m (new-machine `(,(make-AssignImmediateStatement 'proc (make-Const #f))
+                        ,(make-PushControlFrame/Prompt default-continuation-prompt-tag
+                                                       (make-LinkedLabel 'foo-single 'foo-multiple))
+                        ,(make-AssignImmediateStatement 'proc (make-ControlStackLabel))
+                        ,(make-GotoStatement (make-Reg 'proc))
+                        foo-single
+                        ,(make-AssignImmediateStatement 'val (make-Const "single"))
+                        ,(make-GotoStatement (make-Label 'end))
+                        foo-multiple
+                        ,(make-AssignImmediateStatement 'val (make-Const "multiple"))
+                        ,(make-GotoStatement (make-Label 'end))
+                        end))])
+  (test (machine-val (run! m))
+        "single"))
+(let ([m (new-machine `(,(make-AssignImmediateStatement 'proc (make-Const #f))
+                        ,(make-PushControlFrame/Prompt default-continuation-prompt-tag
+                                                       (make-LinkedLabel 'foo-single 'foo-multiple))
+                        ,(make-AssignImmediateStatement 'proc (make-ControlStackLabel/MultipleValueReturn))
+                        ,(make-GotoStatement (make-Reg 'proc))
+                        foo-single
+                        ,(make-AssignImmediateStatement 'val (make-Const "single"))
+                        ,(make-GotoStatement (make-Label 'end))
+                        foo-multiple
+                        ,(make-AssignImmediateStatement 'val (make-Const "multiple"))
+                        ,(make-GotoStatement (make-Label 'end))
+                        end))])
+  (test (machine-val (run! m))
+        "multiple"))
+
 
 
 ;; Splicing
@@ -598,4 +658,75 @@
         (list "hello"
               "world"
               (make-MutablePair 'x (make-MutablePair 'y (make-MutablePair 'z null))))))
+
+
+
+
+
+
+
+;; Check closure mismatch.  Make sure we're getting the right values from the test.
+(let ([m (new-machine `(procedure-entry
+                        ;; doesn't matter about the procedure entry...
+                        ,(make-AssignPrimOpStatement 
+                          'proc
+                          (make-MakeCompiledProcedure 'procedure-entry 0 (list) 'procedure-entry))
+                        ,(make-TestAndBranchStatement
+                          (make-TestClosureArityMismatch (make-Reg 'proc) (make-Const 0))
+                          'bad)
+                        ,(make-AssignImmediateStatement 'val (make-Const 'ok))
+                        ,(make-GotoStatement (make-Label 'end))
+                        bad
+                        ,(make-AssignImmediateStatement 'val (make-Const 'bad))
+                        end))])
+  (test (machine-val (run! m))
+        'ok))
+
+(let ([m (new-machine `(procedure-entry
+                        ;; doesn't matter about the procedure entry...
+                        ,(make-AssignPrimOpStatement 
+                          'proc
+                          (make-MakeCompiledProcedure 'procedure-entry 0 (list) 'procedure-entry))
+                        ,(make-TestAndBranchStatement
+                          (make-TestClosureArityMismatch (make-Reg 'proc) (make-Const 1))
+                          'ok)
+                        ,(make-AssignImmediateStatement 'val (make-Const 'bad))
+                        ,(make-GotoStatement (make-Label 'end))
+                        ok
+                        ,(make-AssignImmediateStatement 'val (make-Const 'ok))
+                        end))])
+  (test (machine-val (run! m))
+        'ok))
+
+(let ([m (new-machine `(procedure-entry
+                        ;; doesn't matter about the procedure entry...
+                        ,(make-AssignPrimOpStatement 
+                          'proc
+                          (make-MakeCompiledProcedure 'procedure-entry (make-ArityAtLeast 2) (list) 'procedure-entry))
+                        ,(make-TestAndBranchStatement
+                          (make-TestClosureArityMismatch (make-Reg 'proc) (make-Const 0))
+                          'ok)
+                        ,(make-AssignImmediateStatement 'val (make-Const 'bad))
+                        ,(make-GotoStatement (make-Label 'end))
+                        ok
+                        ,(make-AssignImmediateStatement 'val (make-Const 'ok))
+                        end))])
+  (test (machine-val (run! m))
+        'ok))
+
+(let ([m (new-machine `(procedure-entry
+                        ;; doesn't matter about the procedure entry...
+                        ,(make-AssignPrimOpStatement 
+                          'proc
+                          (make-MakeCompiledProcedure 'procedure-entry (make-ArityAtLeast 2) (list) 'procedure-entry))
+                        ,(make-TestAndBranchStatement
+                          (make-TestClosureArityMismatch (make-Reg 'proc) (make-Const 2))
+                          'bad)
+                        ,(make-AssignImmediateStatement 'val (make-Const 'ok))
+                        ,(make-GotoStatement (make-Label 'end))
+                        bad
+                        ,(make-AssignImmediateStatement 'val (make-Const 'bad))
+                        end))])
+  (test (machine-val (run! m))
+        'ok))
 

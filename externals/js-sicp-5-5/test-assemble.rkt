@@ -282,7 +282,7 @@
 
 
 (test (E-many `(,(make-AssignImmediateStatement 'val (make-Const 42))
-                ,(make-TestAndBranchStatement 'false? 'val 'onFalse)
+                ,(make-TestAndBranchStatement (make-TestFalse (make-Reg 'val)) 'onFalse)
                 ,(make-AssignImmediateStatement 'val (make-Const 'ok))
                 ,(make-GotoStatement (make-Label 'end))
                 onFalse
@@ -292,7 +292,7 @@
 
 ;; TestAndBranch: try the false branch
 (test (E-many `(,(make-AssignImmediateStatement 'val (make-Const #f))
-                ,(make-TestAndBranchStatement 'false? 'val 'onFalse)
+                ,(make-TestAndBranchStatement (make-TestFalse (make-Reg 'val)) 'onFalse)
                 ,(make-AssignImmediateStatement 'val (make-Const 'not-ok))
                 ,(make-GotoStatement (make-Label 'end))
                 onFalse
@@ -302,7 +302,7 @@
 
 ;; Test for primitive procedure
 (test (E-many `(,(make-AssignImmediateStatement 'val (make-Const '+))
-                ,(make-TestAndBranchStatement 'primitive-procedure? 'val 'onTrue)
+                ,(make-TestAndBranchStatement (make-TestPrimitiveProcedure (make-Reg 'val)) 'onTrue)
                 ,(make-AssignImmediateStatement 'val (make-Const 'ok))
                 ,(make-GotoStatement (make-Label 'end))
                 onTrue
@@ -313,7 +313,7 @@
 ;; Give a primitive procedure in val
 (test (E-many `(,(make-PerformStatement (make-ExtendEnvironment/Prefix! '(+)))
                 ,(make-AssignImmediateStatement 'val (make-EnvPrefixReference 0 0))
-                ,(make-TestAndBranchStatement 'primitive-procedure? 'val 'onTrue)
+                ,(make-TestAndBranchStatement (make-TestPrimitiveProcedure (make-Reg 'val)) 'onTrue)
                 ,(make-AssignImmediateStatement 'val (make-Const 'not-ok))
                 ,(make-GotoStatement (make-Label 'end))
                 onTrue
@@ -324,7 +324,7 @@
 ;; Give a primitive procedure in proc, but test val
 (test (E-many `(,(make-PerformStatement (make-ExtendEnvironment/Prefix! '(+)))
                 ,(make-AssignImmediateStatement 'proc (make-EnvPrefixReference 0 0))
-                ,(make-TestAndBranchStatement 'primitive-procedure? 'val 'onTrue)
+                ,(make-TestAndBranchStatement (make-TestPrimitiveProcedure (make-Reg 'val)) 'onTrue)
                 ,(make-AssignImmediateStatement 'val (make-Const 'not-a-procedure))
                 ,(make-GotoStatement (make-Label 'end))
                 onTrue
@@ -335,7 +335,7 @@
 ;; Give a primitive procedure in proc and test proc
 (test (E-many `(,(make-PerformStatement (make-ExtendEnvironment/Prefix! '(+)))
                 ,(make-AssignImmediateStatement 'proc (make-EnvPrefixReference 0 0))
-                ,(make-TestAndBranchStatement 'primitive-procedure? 'proc 'onTrue)
+                ,(make-TestAndBranchStatement (make-TestPrimitiveProcedure (make-Reg 'proc)) 'onTrue)
                 ,(make-AssignImmediateStatement 'val (make-Const 'not-a-procedure))
                 ,(make-GotoStatement (make-Label 'end))
                 onTrue
@@ -425,3 +425,71 @@
          ,(make-PerformStatement (make-UnspliceRestFromStack! (make-Const 2)  (make-Const 3))))
        "MACHINE.argcount + ',' + MACHINE.env.length + ',' + plt.runtime.isList(MACHINE.env[0]) + ',' + MACHINE.env[2] + ',' + MACHINE.env[1]")
       "3,3,true,hello,world")
+
+
+
+;; Check closure mismatch.  Make sure we're getting the right values from the test.
+(test (E-many `(procedure-entry
+                        ;; doesn't matter about the procedure entry...
+                        ,(make-AssignPrimOpStatement 
+                          'proc
+                          (make-MakeCompiledProcedure 'procedure-entry 0 (list) 'procedure-entry))
+                        ,(make-TestAndBranchStatement
+                          (make-TestClosureArityMismatch (make-Reg 'proc) (make-Const 0))
+                          'bad)
+                        ,(make-AssignImmediateStatement 'val (make-Const 'ok))
+                        ,(make-GotoStatement (make-Label 'end))
+                        bad
+                        ,(make-AssignImmediateStatement 'val (make-Const 'bad))
+                        end)
+              "MACHINE.val")
+      "ok")
+      
+
+(test (E-many `(procedure-entry
+                        ;; doesn't matter about the procedure entry...
+                        ,(make-AssignPrimOpStatement 
+                          'proc
+                          (make-MakeCompiledProcedure 'procedure-entry 0 (list) 'procedure-entry))
+                        ,(make-TestAndBranchStatement
+                          (make-TestClosureArityMismatch (make-Reg 'proc) (make-Const 1))
+                          'ok)
+                        ,(make-AssignImmediateStatement 'val (make-Const 'bad))
+                        ,(make-GotoStatement (make-Label 'end))
+                        ok
+                        ,(make-AssignImmediateStatement 'val (make-Const 'ok))
+                        end)
+              "MACHINE.val")
+      "ok")
+
+(test (E-many `(procedure-entry
+                        ;; doesn't matter about the procedure entry...
+                        ,(make-AssignPrimOpStatement 
+                          'proc
+                          (make-MakeCompiledProcedure 'procedure-entry (make-ArityAtLeast 2) (list) 'procedure-entry))
+                        ,(make-TestAndBranchStatement
+                          (make-TestClosureArityMismatch (make-Reg 'proc) (make-Const 0))
+                          'ok)
+                        ,(make-AssignImmediateStatement 'val (make-Const 'bad))
+                        ,(make-GotoStatement (make-Label 'end))
+                        ok
+                        ,(make-AssignImmediateStatement 'val (make-Const 'ok))
+                        end)
+              "MACHINE.val")
+      "ok")
+
+(test (E-many `(procedure-entry
+                        ;; doesn't matter about the procedure entry...
+                        ,(make-AssignPrimOpStatement 
+                          'proc
+                          (make-MakeCompiledProcedure 'procedure-entry (make-ArityAtLeast 2) (list) 'procedure-entry))
+                        ,(make-TestAndBranchStatement
+                          (make-TestClosureArityMismatch (make-Reg 'proc) (make-Const 2))
+                          'bad)
+                        ,(make-AssignImmediateStatement 'val (make-Const 'ok))
+                        ,(make-GotoStatement (make-Label 'end))
+                        bad
+                        ,(make-AssignImmediateStatement 'val (make-Const 'bad))
+                        end)
+              "MACHINE.val")
+      "ok")

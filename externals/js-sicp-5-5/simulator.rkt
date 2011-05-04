@@ -125,18 +125,9 @@
 
 (: step-goto! (machine GotoStatement -> 'ok))
 (define (step-goto! m a-goto)
-  (let: ([t : (U Label Reg) (GotoStatement-target a-goto)])
-        (cond [(Label? t)
-               (jump! m (Label-name t))]
-              [(Reg? t)
-               (let: ([reg : AtomicRegisterSymbol (Reg-name t)])
-                     (cond [(AtomicRegisterSymbol? reg)
-                            (cond [(eq? reg 'val)
-                                   (jump! m (ensure-symbol (machine-val m)))]
-                                  [(eq? reg 'proc)
-                                   (jump! m (ensure-symbol (machine-proc m)))]
-                                  [(eq? reg 'argcount)
-                                   (error 'goto "argcount misused as jump source")])]))])))
+  (let: ([t : Symbol (ensure-symbol (evaluate-oparg m (GotoStatement-target a-goto)))])
+        (jump! m t)))
+        
 
 (: step-assign-immediate! (machine AssignImmediateStatement -> 'ok))
 (define (step-assign-immediate! m stmt)
@@ -208,15 +199,25 @@
 
 (: step-test-and-branch! (machine TestAndBranchStatement -> 'ok))
 (define (step-test-and-branch! m stmt)
-  (let: ([test : PrimitiveTest (TestAndBranchStatement-op stmt)]
-         [argval : SlotValue (lookup-atomic-register m (TestAndBranchStatement-register stmt))])
+  (let: ([test : PrimitiveTest (TestAndBranchStatement-op stmt)])
         (if (let: ([v : Boolean (cond
-                                  [(eq? test 'false?)
-                                   (not argval)]
-                                  [(eq? test 'one?)
-                                   (= (ensure-natural argval) 1)]
-                                  [(eq? test 'primitive-procedure?)
-                                   (primitive-proc? argval)])])
+                                  [(TestFalse? test)
+                                   (not (evaluate-oparg m (TestFalse-operand test)))]
+                                  [(TestOne? test)
+                                   (= (ensure-natural (evaluate-oparg m (TestOne-operand test)))
+                                      1)]
+				  [(TestZero? test)
+				   (= (ensure-natural (evaluate-oparg m (TestZero-operand test)))
+                                      0)]
+                                  [(TestPrimitiveProcedure? test)
+                                   (primitive-proc? (evaluate-oparg m (TestPrimitiveProcedure-operand test)))]
+                                  [(TestClosureArityMismatch? test)
+                                   (let ([proc (ensure-closure
+                                                (evaluate-oparg m (TestClosureArityMismatch-closure test)))]
+                                         [n (ensure-natural 
+                                             (evaluate-oparg m (TestClosureArityMismatch-n test)))])
+                                     (not (arity-match? (closure-arity proc) n)))])])
+
                   v)
             (jump! m (TestAndBranchStatement-label stmt))
             'ok)))
@@ -383,7 +384,20 @@
                         (ensure-primitive-value key)
                         (ensure-primitive-value val))
              'ok)]
-          )))
+          
+          [(RaiseContextExpectedValuesError!? op)
+           (error "context expected ~a values, received ~a values."
+                  (RaiseContextExpectedValuesError!-expected op)
+                  (machine-argcount m))]
+
+	  [(RaiseArityMismatchError!? op)
+	   (error "expects ~s arguments, given ~a"
+		  (RaiseArityMismatchError!-expected op)
+		  (evaluate-oparg m (RaiseArityMismatchError!-received op)))]
+
+	  [(RaiseOperatorApplicationError!? op)
+	   (error "expected procedure, given ~a"
+		  (evaluate-oparg m (RaiseOperatorApplicationError!-operator op)))])))
 
 
 
@@ -494,7 +508,7 @@
                                             (MakeCompiledProcedureShell-arity op)
                                             '()
                                             (MakeCompiledProcedureShell-display-name op)))]
-          
+                            
           [(ApplyPrimitiveProcedure? op)
            (let: ([prim : SlotValue (machine-proc m)]
                   [args : (Listof PrimitiveValue)
@@ -510,46 +524,6 @@
                                                  args))))]
                    [else
                     (error 'apply-primitive-procedure)]))]
-          
-          [(GetControlStackLabel? op)
-           (target-updater! m (let ([frame (ensure-frame (first (machine-control m)))])
-                                (cond
-                                  [(GenericFrame? frame)
-                                   (error 'GetControlStackLabel)]
-                                  [(PromptFrame? frame)
-                                   (let ([label (PromptFrame-return frame)])
-                                     (cond
-                                       [(symbol? label)
-                                        label]
-                                       [(LinkedLabel? label)
-                                        (LinkedLabel-label label)]))]
-                                  [(CallFrame? frame)
-                                   (let ([label (CallFrame-return frame)])
-                                     (cond
-                                       [(symbol? label)
-                                        label]
-                                       [(LinkedLabel? label)
-                                        (LinkedLabel-label label)]))])))]
-          
-          [(GetControlStackLabel/MultipleValueReturn? op)
-           (target-updater! m (let ([frame (ensure-frame (first (machine-control m)))])
-                                (cond
-                                  [(GenericFrame? frame)
-                                   (error 'GetControlStackLabel/MultipleValueReturn)]
-                                  [(PromptFrame? frame)
-                                   (let ([label (PromptFrame-return frame)])
-                                     (cond
-                                       [(symbol? label) 
-                                        (error 'GetControlStackLabel/MultipleValueReturn)]
-                                       [(LinkedLabel? label)
-                                        (LinkedLabel-linked-to label)]))]
-                                  [(CallFrame? frame)
-                                   (let ([label (CallFrame-return frame)])
-                                     (cond
-                                       [(symbol? label) 
-                                        (error 'GetControlStackLabel/MultipleValueReturn)]
-                                       [(LinkedLabel? label)
-                                        (LinkedLabel-linked-to label)]))])))]
           
           [(CaptureEnvironment? op)
            (target-updater! m (make-CapturedEnvironment (drop (machine-env m)
@@ -750,7 +724,43 @@
 
     [(SubtractArg? an-oparg)
      (- (ensure-number (evaluate-oparg m (SubtractArg-lhs an-oparg)))
-        (ensure-number (evaluate-oparg m (SubtractArg-rhs an-oparg))))]))
+        (ensure-number (evaluate-oparg m (SubtractArg-rhs an-oparg))))]
+
+
+
+    [(ControlStackLabel? an-oparg)
+     (let ([frame (ensure-frame (first (machine-control m)))])
+       (cond
+	[(GenericFrame? frame)
+	 (error 'GetControlStackLabel)]
+	[(PromptFrame? frame)
+	 (let ([label (PromptFrame-return frame)])
+	   (LinkedLabel-label label))]
+	[(CallFrame? frame)
+	 (let ([label (CallFrame-return frame)])
+	   (LinkedLabel-label label))]))]
+    
+    [(ControlStackLabel/MultipleValueReturn? an-oparg)
+     (let ([frame (ensure-frame (first (machine-control m)))])
+       (cond
+	[(GenericFrame? frame)
+	 (error 'GetControlStackLabel/MultipleValueReturn)]
+	[(PromptFrame? frame)
+	 (let ([label (PromptFrame-return frame)])
+	   (LinkedLabel-linked-to label))]
+	[(CallFrame? frame)
+	 (let ([label (CallFrame-return frame)])
+	   (LinkedLabel-linked-to label))]))]
+
+    [(CompiledProcedureEntry? an-oparg)
+     (let ([proc (ensure-closure (evaluate-oparg m (CompiledProcedureEntry-proc an-oparg)))])
+       (closure-label proc))]
+
+    [(ControlFrameTemporary? an-oparg)
+     (let ([ht (frame-temps (control-top m))])
+       (hash-ref ht
+                 (ControlFrameTemporary-name an-oparg)))]))
+
 
 
 (: ensure-closure-or-false (SlotValue -> (U closure #f)))
@@ -802,7 +812,7 @@
 (define (ensure-natural x)
   (if (natural? x)
       x
-      (error 'ensure-natural)))
+      (error 'ensure-natural "not a natural: ~s" x)))
 
 (: ensure-number (Any -> Number))
 (define (ensure-number x)

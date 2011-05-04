@@ -12,7 +12,16 @@
          assemble-whole-prefix-reference
          assemble-reg
          assemble-label
-         assemble-listof-assembled-values)
+         assemble-listof-assembled-values
+	 assemble-default-continuation-prompt-tag
+	 assemble-env-reference/closure-capture
+	 assemble-arity
+	 assemble-jump
+	 assemble-display-name
+	 assemble-location)
+
+(require/typed typed/racket/base
+               [regexp-split (Regexp String -> (Listof String))])
 
 
 (: assemble-oparg (OpArg -> String))
@@ -31,7 +40,15 @@
     [(EnvWholePrefixReference? v)
      (assemble-whole-prefix-reference v)]
     [(SubtractArg? v)
-     (assemble-subtractarg v)]))
+     (assemble-subtractarg v)]
+    [(ControlStackLabel? v)
+     (assemble-control-stack-label v)]
+    [(ControlStackLabel/MultipleValueReturn? v)
+     (assemble-control-stack-label/multiple-value-return v)]
+    [(CompiledProcedureEntry? v)
+     (assemble-compiled-procedure-entry v)]
+    [(ControlFrameTemporary? v)
+     (assemble-control-frame-temporary v)]))
 
 
 
@@ -52,10 +69,13 @@
     [(PrimitivesReference? target)
      (format "MACHINE.primitives[~s]" (symbol->string (PrimitivesReference-name target)))]
     [(ControlFrameTemporary? target)
-     (format "MACHINE.control[MACHINE.control.length-1].~a"
-             (ControlFrameTemporary-name target))]))
+     (assemble-control-frame-temporary target)]))
 
 
+(: assemble-control-frame-temporary (ControlFrameTemporary -> String))
+(define (assemble-control-frame-temporary t)
+  (format "MACHINE.control[MACHINE.control.length-1].~a"
+          (ControlFrameTemporary-name t)))
 
 ;; fixme: use js->string
 (: assemble-const (Const -> String))
@@ -118,10 +138,113 @@
 
 (: assemble-label (Label -> String))
 (define (assemble-label a-label)
-  (symbol->string (Label-name a-label)))
+  (let ([chunks
+         (regexp-split #rx"[^a-zA-Z0-9]+"
+                       (symbol->string (Label-name a-label)))])
+    (cond
+      [(empty? chunks)
+       (error "impossible: empty label ~s" a-label)]
+      [(empty? (rest chunks))
+       (string-append "_" (first chunks))]
+      [else
+       (string-append "_"
+                      (first chunks)
+                      (apply string-append (map string-titlecase (rest chunks))))])))
+
+
 
 (: assemble-subtractarg (SubtractArg -> String))
 (define (assemble-subtractarg s)
   (format "(~a - ~a)"
           (assemble-oparg (SubtractArg-lhs s))
           (assemble-oparg (SubtractArg-rhs s))))
+
+
+(: assemble-control-stack-label (ControlStackLabel -> String))
+(define (assemble-control-stack-label a-csl)
+  "MACHINE.control[MACHINE.control.length-1].label")
+
+
+(: assemble-control-stack-label/multiple-value-return (ControlStackLabel/MultipleValueReturn -> String))
+(define (assemble-control-stack-label/multiple-value-return a-csl)
+  "MACHINE.control[MACHINE.control.length-1].label.multipleValueReturn")
+
+
+
+(: assemble-compiled-procedure-entry (CompiledProcedureEntry -> String))
+(define (assemble-compiled-procedure-entry a-compiled-procedure-entry)
+  (format "(~a).label"
+          (assemble-oparg (CompiledProcedureEntry-proc a-compiled-procedure-entry))))
+
+
+
+(: assemble-default-continuation-prompt-tag (-> String))
+(define (assemble-default-continuation-prompt-tag)
+  "RUNTIME.DEFAULT_CONTINUATION_PROMPT_TAG")
+
+
+
+(: assemble-env-reference/closure-capture (Natural -> String))
+;; When we're capturing the values for a closure, we need to not unbox
+;; lexical references: they must remain boxes.  So all we need is 
+;; the depth into the environment.
+(define (assemble-env-reference/closure-capture depth)
+  (format "MACHINE.env[MACHINE.env.length - 1 - ~a]"
+          depth))
+
+
+
+(define-predicate natural? Natural)
+
+(: assemble-arity (Arity -> String))
+(define (assemble-arity an-arity)
+  (cond
+   [(natural? an-arity)
+    (format "~a" an-arity)]
+   [(ArityAtLeast? an-arity)
+    (format "(new RUNTIME.ArityAtLeast(~a))" (ArityAtLeast-value an-arity))]
+   [(listof-atomic-arity? an-arity)
+    (assemble-listof-assembled-values
+     (map
+      (lambda: ([atomic-arity : (U Natural ArityAtLeast)])
+	       (cond
+		[(natural? atomic-arity)
+		 (format "~a" an-arity)]
+		[(ArityAtLeast? an-arity)
+		 (format "(new RUNTIME.ArityAtLeast(~a))" (ArityAtLeast-value an-arity))]
+		;; Can't seem to make the type checker happy without this...
+		[else (error 'assemble-arity)]))
+      an-arity))]))
+
+
+
+
+
+(: assemble-jump (OpArg -> String))
+(define (assemble-jump target)
+  (format "return (~a)(MACHINE);" (assemble-oparg target)))
+
+
+
+
+
+(: assemble-display-name ((U Symbol False) -> String))
+(define (assemble-display-name symbol-or-string)
+  (if (symbol? symbol-or-string)
+       (format "~s" (symbol->string symbol-or-string))
+       "false"))
+
+
+
+
+
+
+(: assemble-location ((U Reg Label) -> String))
+(define (assemble-location a-location)
+  (cond
+     [(Reg? a-location)
+      (assemble-reg a-location)]
+     [(Label? a-location)
+      (assemble-label a-location)]))
+
+

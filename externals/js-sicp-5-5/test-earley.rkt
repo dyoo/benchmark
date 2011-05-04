@@ -8,7 +8,7 @@
 
 
 (define (run-compiler code)
-  (compile (parse code) 'val next-linkage/drop-multiple))
+  (compile (parse code) 'val next-linkage))
   
 ;; run: machine -> (machine number)
 ;; Run the machine to completion.
@@ -56,7 +56,7 @@
              (printf "ok. ~s steps.\n\n" num-steps)))))]))
 
 
-(test (read (open-input-file "tests/conform/program0.sch"))
-      (port->string (open-input-file "tests/conform/expected0.txt"))
+(test (read (open-input-file "tests/earley/earley.sch"))
+      (port->string (open-input-file "tests/earley/expected.txt"))
       ;;#:debug? #t
       )

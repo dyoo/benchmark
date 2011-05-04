@@ -25,7 +25,6 @@
 (require (prefix-in racket: "platforms/racket/runner.rkt"))
 (require (prefix-in browser: "platforms/js-sicp-5-5-browser/runner.rkt"))
 (require (prefix-in simulator: "platforms/js-sicp-5-5-simulator/runner.rkt"))
-(require (prefix-in js-vm: "platforms/js-vm/runner.rkt"))
 
 (define-runtime-path this-path ".")
 
@@ -33,7 +32,13 @@
 (define-struct platform (name runner))
 (define all-platforms (list (make-platform "racket" (delay (racket:make-run)))
                             #;(make-platform "simulator" (delay (simulator:make-run)))
-                            (make-platform "js-vm" (delay (js-vm:make-run)))
+                            (make-platform 
+			     "js-vm" 
+			     (delay 
+			       (let ([make-run 
+				      (dynamic-require "platforms/js-vm/runner.rkt"
+						       'make-run)])
+				 (make-run))))
                             (make-platform "browser" (delay (browser:make-run)))))
 
 (define (find-platform name)
