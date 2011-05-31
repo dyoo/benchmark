@@ -1,0 +1,162 @@
+======================================================================
+Whalesong: a compiler from Racket to JavaScript.
+
+Danny Yoo (dyoo@cs.wpi.edu)
+
+======================================================================
+
+
+Prerequisite: Racket 5.1.1.  The majority of the project is written
+Typed Racket, and I highly recommend you use a version of Racket
+that's at least 5.1.1; otherwise, compilation may take an unusual
+amount of time.
+
+
+======================================================================
+
+Example usage
+
+[FIXME]
+
+
+
+
+======================================================================
+
+Architecture:
+
+The basic idea is to reuse most of the Racket compiler infrastructure.
+We use the underlying Racket compiler to produce bytecode from Racket
+source; it also performs macro expansion and module-level
+optimizations for us.  We parse that bytecode using the
+compiler/zo-parse collection to get an AST, compile that to an
+intermediate language, and finally assemble JavaScript.
+
+
+                        AST          IL                     JS
+ parse-bytecode.rkt ----------> compiler.rkt --------> assembler.rkt ------->
+    (todo)
+
+
+The IL is intended to be translated straightforwardly.  We currently
+have an assembler to JavaScript, as well as a simulator
+(simulator.rkt).  The simulator allows us to test the compiler in a
+controlled environment.
+
+
+
+======================================================================
+
+parser/parse-bytecode.rkt
+
+This is intended to reuse the Racket compiler to produce the AST
+structures defined in compiler/zo-parse.
+
+
+======================================================================
+
+compiler/compiler.rkt
+
+translates the AST to the intermediate language.  The compiler has its
+origins in the register compiler in Structure and Interpretation of
+Computer Programs:
+
+    http://mitpress.mit.edu/sicp/full-text/book/book-Z-H-35.html#%_sec_5.5
+
+with some significant modifications.  Since this is a stack machine,
+we don't need any of the register-saving infrastructure in the
+original compiler.  We also need to support slightly different linkage
+structures, since we want to support multiple value contexts.  We're
+trying to generate code that works effectively on a machine like the
+one described in:
+
+    http://plt.eecs.northwestern.edu/racket-machine/
+
+
+
+The intermediate language is defined in il-structs.rkt, and a
+simulator for the IL in simulator/simulator.rkt.  See
+test-simulator.rkt to see the simulator in action, and
+test-compiler.rkt to see how the output of the compiler can be fed
+into the simulator.
+
+
+
+The assumed machine is a stack machine with the following atomic
+registers:
+
+    val: value
+    proc: procedure
+    argcount: number of arguments
+
+and two stack registers:
+
+    env: environment stack
+    control: control stack
+
+
+
+======================================================================
+
+js-assembler/assemble.rkt
+
+The JavaScript assembler plays a few tricks to make things like tail
+calls work:
+
+   * Each basic block is translated to a function taking a MACHINE
+     argument.
+
+   * Every GOTO becomes a function call.
+
+   * The head of each basic-blocked function checks to see if we
+     should trampoline
+     (http://en.wikipedia.org/wiki/Trampoline_(computers))
+
+   * We support a limited form of computed jump by assigning an
+     attribute to the function corresponding to a return point.  See
+     the code related to the LinkedLabel structure for details.
+
+
+Otherwise, the assembler is fairly straightforward.  It depends on
+library functions defined in mini-runtime.js.  As soon as the compiler
+stabilizes, we will be pulling in the runtime library in Moby Scheme
+into this project.
+
+
+The assembled output distinguishes between Primitives and Closures.
+Primitives are only allowed to return single values back, and are not
+allowed to do any higher-order procedure calls.  Closures, on the
+other hand, have full access to the machine, but they are responsible
+for calling the continuation and popping off their arguments when
+they're finished.
+
+
+
+
+======================================================================
+
+Tests
+
+The test suite in test-all.rkt runs the test suite.  You'll need to
+run this on a system with a web browser, as the suite will evaluate
+JavaScript and make sure it is producing values.  A bridge module
+browser-evaluate.rkt brings up a temporary web server that allows us
+to pass values between Racket and the JavaScript evaluator on the
+browser.
+
+
+
+======================================================================
+
+Acknowledgements and Thanks
+
+
+This uses code from the following projects:
+
+   jshashtable (http://www.timdown.co.uk/jshashtable/)
+   js-numbers (http://github.com/dyoo/js-numbers/)
+   JSON (http://www.json.org/js.html)
+   jquery (http://jquery.com/)
+
+
+   [FIXME: add more]

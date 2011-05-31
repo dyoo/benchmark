@@ -1,3 +1,4 @@
+#!/usr/bin/env racket
 #lang racket/base
 
 ;; Command line program.  Run benchmarks on different platforms.
@@ -25,6 +26,7 @@
 (require (prefix-in racket: "platforms/racket/runner.rkt"))
 (require (prefix-in browser: "platforms/js-sicp-5-5-browser/runner.rkt"))
 (require (prefix-in simulator: "platforms/js-sicp-5-5-simulator/runner.rkt"))
+(require (prefix-in whalesong: "platforms/whalesong/runner.rkt"))
 
 (define-runtime-path this-path ".")
 
@@ -39,7 +41,8 @@
 				      (dynamic-require "platforms/js-vm/runner.rkt"
 						       'make-run)])
 				 (make-run))))
-                            (make-platform "browser" (delay (browser:make-run)))))
+                            (make-platform "browser" (delay (browser:make-run)))
+                            (make-platform "whalesong" (delay (whalesong:make-run)))))
 
 (define (find-platform name)
   (let loop ([platforms all-platforms])

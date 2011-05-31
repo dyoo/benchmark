@@ -1,0 +1,1422 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Example</title>
+</head>
+<script>
+<![CDATA[
+    if(this['plt'] === undefined) {
+	this['plt'] = {};
+    }
+
+
+// All of the values here are namespaced under "plt.runtime".
+
+(function() {
+    this['plt']['runtime'] = {};
+    var exports = this['plt']['runtime'];
+
+
+
+    // Type helpers
+    //
+    // Defines inheritance between prototypes.
+    var heir = function(parentPrototype) {
+	var f = function() {}
+	f.prototype = parentPrototype;
+	return new f();
+    };
+
+    // Consumes a class and creates a predicate that recognizes subclasses.
+    var makeClassPredicate = function(aClass) {
+	return function(x) { return x instanceof aClass; };
+    };
+
+
+    var isNumber = function(x) { return typeof(x) === 'number'; };
+
+    var isNatural = function(x) { return typeof(x) === 'number' &&
+				  x >= 0 &&
+				  Math.floor(x) === x; };
+
+
+    var isPair = function(x) { return (typeof(x) == 'object' && 
+				       x.length === 2 &&
+				       x.type !== 'vector') };
+    var isList = function(x) {
+	while (x !== NULL) {
+	    if (typeof(x) == 'object' && x.length === 2) {
+		x = x[1];
+	    } else {
+		return false;
+	    }
+	}
+	return true;
+    };
+
+    var isVector = function(x) { return (typeof(x) == 'object' && 
+					 x.type === 'vector') };
+
+
+    // This value will be dynamically determined.
+    // See findStackLimit later in this file.
+    var STACK_LIMIT_ESTIMATE = 100;
+
+
+    var Machine = function() {
+	this.callsBeforeTrampoline = STACK_LIMIT_ESTIMATE;
+	this.val = undefined;
+	this.proc = undefined;
+	this.argcount = undefined;
+	this.env = [];
+	this.control = [];     // Arrayof (U Frame CallFrame PromptFrame)
+	this.running = false;
+	this.modules = {};     // String -> ModuleRecord
+	this.params = { 'currentDisplayer': function(v) {},
+			
+			'currentOutputPort': new StandardOutputPort(),
+			'currentSuccessHandler': function(MACHINE) {},
+			'currentErrorHandler': function(MACHINE, exn) {},
+			
+			'currentNamespace': {},
+			
+			// These parameters control how often
+			// control yields back to the browser
+			// for response.  The implementation is a
+			// simple PID controller.
+			//
+			// To tune this, adjust desiredYieldsPerSecond.
+			// Do no touch numBouncesBeforeYield or
+			// maxNumBouncesBeforeYield, because those
+			// are adjusted automatically by the
+			// recomputeMaxNumBouncesBeforeYield
+			// procedure.
+			'desiredYieldsPerSecond': 5,
+			'numBouncesBeforeYield': 2000,   // self-adjusting
+			'maxNumBouncesBeforeYield': 2000 // self-adjusting
+		      };
+	this.primitives = Primitives;
+    };
+
+    var HaltMachine = function() {}
+
+    var ModuleRecord = function(name, label) {
+	this.name = name;
+	this.label = label;
+	this.isInvoked = false;
+	this.exports = {};
+    };
+
+    ModuleRecord.prototype.invoke = function(MACHINE, succ, fail) {
+        var oldErrorHandler = MACHINE.params['currentErrorHandler'];
+        var afterGoodInvoke = function(MACHINE) { 
+            MACHINE.params['currentErrorHandler'] = oldErrorHandler;
+            setTimeout(succ, 0);
+            throw new HaltMachine();
+        };
+
+        if (this.isInvoked) {
+            setTimeout(succ, 0);
+        } else {
+            MACHINE.params['currentErrorHandler'] = function(MACHINE, anError) {
+                MACHINE.params['currentErrorHandler'] = oldErrorHandler;
+                setTimeout(function() { fail(MACHINE, anError)}, 0);
+            };
+            MACHINE.control.push(new CallFrame(
+                afterGoodInvoke,
+                null));
+            trampoline(MACHINE, this.label);
+        }
+    };
+
+
+
+    // A generic frame just holds marks.
+    var Frame = function() {
+	// The set of continuation marks.
+	this.marks = [];
+
+	// When we're in the middle of computing with-cont-mark, we
+	// stash the key in here temporarily.
+	this.pendingContinuationMarkKey = undefined;
+	this.pendingApplyValuesProc = undefined;
+	this.pendingBegin0Count = undefined;
+	this.pendingBegin0Values = undefined;
+    };
+
+
+    // Frames must support marks and the temporary variables necessary to
+    // support with-continuation-mark and with-values.
+
+    // Specialized frames support more features:
+
+    // A CallFrame represents a call stack frame, and includes the return address
+    // as well as the function being called.
+    var CallFrame = function(label, proc) {
+	this.label = label;
+	this.proc = proc;
+
+	// When we're in the middle of computing with-cont-mark, we
+	// stash the key in here temporarily.
+	this.pendingContinuationMarkKey = undefined;
+
+	// The set of continuation marks.
+	this.marks = [];
+    };
+    CallFrame.prototype = heir(Frame.prototype);
+
+    // A prompt frame includes a return address, as well as a prompt tag
+    // for supporting delimited continuations.
+    var PromptFrame = function(label, tag) {
+	this.label = label;
+	this.tag = tag; // ContinuationPromptTag
+
+	// The set of continuation marks.
+	this.marks = [];
+
+	// When we're in the middle of computing with-cont-mark, we
+	// stash the key in here temporarily.
+	this.pendingContinuationMarkKey = undefined;	
+    };
+    PromptFrame.prototype = heir(Frame.prototype);
+
+
+
+
+
+
+
+
+    var OutputPort = function() {};
+    var isOutputPort = makeClassPredicate(OutputPort);
+
+
+    var StandardOutputPort = function() {};
+    StandardOutputPort.prototype = heir(OutputPort.prototype);
+    StandardOutputPort.prototype.write = function(MACHINE, v) {
+	MACHINE.params['currentDisplayer'](v);
+    };
+
+
+
+    var OutputStringPort = function() {
+	this.buf = [];
+    };
+    OutputStringPort.prototype = heir(OutputPort.prototype);
+    OutputStringPort.prototype.write = function(MACHINE, v) {
+	this.buf.push(String(v));
+    };
+    OutputStringPort.prototype.getOutputString = function() {
+	return this.buf.join('');
+    };
+    var isOutputStringPort = makeClassPredicate(OutputStringPort);
+
+
+
+
+    // Function types: a function is either a Primitive or a Closure.
+
+    // A Primitive is a function that's expected to return.  It is not
+    // allowed to call into Closures.  Its caller is expected to pop off
+    // its argument stack space.
+    //
+    //
+    // A Closure is a function that takes on more responsibilities: it is
+    // responsible for popping off stack space before it finishes, and it
+    // is also explicitly responsible for continuing the computation by 
+    // popping off the control stack and doing the jump.  Because of this,
+    // closures can do pretty much anything to the machine.
+
+
+
+    // A closure consists of its free variables as well as a label
+    // into its text segment.
+    var Closure = function(label, arity, closedVals, displayName) {
+	this.label = label;              // (MACHINE -> void)
+	this.arity = arity;              // number
+	this.closedVals = closedVals;    // arrayof number
+	this.displayName = displayName;  // string
+    };
+
+
+
+    var VariableReference = function(prefix, pos) {
+        this.prefix = prefix;
+        this.pos = pos;
+    };
+
+
+
+
+
+
+    // A continuation prompt tag labels a prompt frame.
+    var ContinuationPromptTag = function(name) {
+	this.name = name;
+    };
+
+
+
+    // There is a single, distinguished default continuation prompt tag
+    // that's used to wrap around toplevel prompts.
+    var DEFAULT_CONTINUATION_PROMPT_TAG = 
+	new ContinuationPromptTag("default-continuation-prompt-tag");
+
+
+    var NULL = [];
+
+
+    var raise = function(MACHINE, e) { 
+	if (typeof(window.console) !== 'undefined' &&
+	    typeof(console.log) === 'function') {
+	    console.log(MACHINE);
+	    console.log(e);
+	} 
+	throw e; 
+    };
+
+
+
+    // testArgument: (X -> boolean) X number string string -> boolean
+    // Produces true if val is true, and otherwise raises an error.
+    var testArgument = function(MACHINE,
+				expectedTypeName,
+				predicate, 			    
+				val, 
+				index, 
+				callerName) {
+	if (predicate(val)) {
+	    return true;
+	}
+	else {
+	    raise(MACHINE, new Error(callerName + ": expected " + expectedTypeName
+				     + " as argument " + (index + 1)
+				     + " but received " + val));
+	}
+    };
+
+    var testArity = function(callerName, observed, minimum, maximum) {
+	if (observed < minimum || observed > maximum) {
+	    raise(MACHINE, new Error(callerName + ": expected at least " + minimum
+				     + " arguments "
+				     + " but received " + observer));
+
+	}
+    };
+
+    var raiseContextExpectedValuesError = function(MACHINE, expected) {
+	raise(MACHINE, 
+	      new Error("expected " + expected +
+			" values, received " + 
+			MACHINE.argcount + " values"));
+    };
+
+
+    // captureControl implements the continuation-capturing part of
+    // call/cc.  It grabs the control frames up to (but not including) the
+    // prompt tagged by the given tag.
+    var captureControl = function(MACHINE, skip, tag) {
+	var i;
+	for (i = MACHINE.control.length - 1 - skip; i >= 0; i--) {
+	    if (MACHINE.control[i].tag === tag) {
+		return MACHINE.control.slice(i + 1,
+					     MACHINE.control.length - skip);
+	    }
+	} 
+	raise(MACHINE, new Error("captureControl: unable to find tag " + tag));
+    };
+
+
+
+    // restoreControl clears the control stack (up to, but not including the
+    // prompt tagged by tag), and then appends the rest of the control frames.
+    // At the moment, the rest of the control frames is assumed to be in the 
+    // top of the environment.
+    var restoreControl = function(MACHINE, tag) {
+	var i;
+	for (i = MACHINE.control.length - 1; i >= 0; i--) {
+	    if (MACHINE.control[i].tag === tag) {
+		MACHINE.control = 
+		    MACHINE.control.slice(0, i+1).concat(
+			MACHINE.env[MACHINE.env.length - 1]);
+		return;
+	    }
+	}
+	raise(MACHINE, new Error("restoreControl: unable to find tag " + tag));     
+
+    };
+
+
+    // Splices the list argument in the environment.  Adjusts MACHINE.argcount
+    // appropriately.
+    var spliceListIntoStack = function(MACHINE, depth) {
+	var lst = MACHINE.env[MACHINE.env.length - 1 - depth];
+	var vals = [];
+	while(lst !== NULL) {
+	    vals.push(lst[0]);
+	    lst = lst[1];
+	}
+	vals.reverse();
+	MACHINE.env.splice.apply(MACHINE.env,
+				 [MACHINE.env.length - 1 - depth, 1].concat(vals));
+	MACHINE.argcount = MACHINE.argcount + vals.length - 1;
+    };
+
+
+    var unspliceRestFromStack = function(MACHINE, depth, length) {
+	var lst = NULL;
+	var i;
+	for (i = 0; i < length; i++) {
+	    lst = [MACHINE.env[MACHINE.env.length - depth - length + i], lst];
+	}
+	MACHINE.env.splice(MACHINE.env.length - depth - length,
+			   length, 
+			   lst);
+	MACHINE.argcount = MACHINE.argcount - length + 1;
+    };
+
+
+
+    // An arity is either a primitive number, an ArityAtLeast instance,
+    // or a list of either primitive numbers or ArityAtLeast instances.
+
+    var ArityAtLeast = function(n) {
+	this.value = n;
+    };
+
+    // isArityMatching: arity natural -> boolean
+    // Produces true if n satisfies the arity.
+    var isArityMatching = function(arity, n) {
+	if (typeof(arity) === 'number') {
+	    return arity === n;
+	} else if (arity instanceof ArityAtLeast) {
+	    return n >= arity.value;
+	} else {
+	    while (arity !== NULL) {
+		if (typeof(arity[0]) === 'number') {
+		    if (arity[0] === n) { return true; }
+		} else if (arity instanceof ArityAtLeast) {
+		    if (n >= arity[0].value) { return true; }
+		}
+		arity = arity[1];
+	    }
+	    return false;
+	}
+    }
+
+
+
+
+    
+
+    // Primitives are the set of primitive values.  Not all primitives
+    // are coded here; several of them (including call/cc) are injected by
+    // the bootstrapping code.
+    var Primitives = {};
+    Primitives['display'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	var outputPort = MACHINE.params.currentOutputPort;
+	if (MACHINE.argcount === 2) {
+	    testArgument(MACHINE,
+			 'isOutputPort', 
+			 isOutputPort, 
+			 MACHINE.env.length-2,
+			 1,
+			 'display');
+	    outputPort = MACHINE.env[MACHINE.env.length-2];
+	}
+	outputPort.write(MACHINE, firstArg);
+    };
+    Primitives['display'].arity = [1, [2, NULL]];
+    Primitives['display'].displayName = 'display';
+
+
+    Primitives['newline'] = function(MACHINE) {
+	var outputPort = MACHINE.params.currentOutputPort;
+	if (MACHINE.argcount === 1) { 
+	    testArgument(MACHINE,
+			 'isOutputPort', 
+			 isOutputPort, 
+			 MACHINE.env.length-1,
+			 1,
+			 'newline');
+	    outputPort = MACHINE.env[MACHINE.env.length-1];
+	}
+	outputPort.write(MACHINE, "\n");
+    };
+    Primitives['newline'].arity = [0, [1, NULL]];
+    Primitives['newline'].displayName = 'newline';
+
+
+    Primitives['displayln'] = function(MACHINE){
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	var outputPort = MACHINE.params.currentOutputPort;
+	if (MACHINE.argcount === 2) {
+	    testArgument(MACHINE,
+			 'isOutputPort', 
+			 isOutputPort, 
+			 MACHINE.env.length-2,
+			 1,
+			 'displayln'); 
+	    outputPort = MACHINE.env[MACHINE.env.length-2];
+	}
+	outputPort.write(MACHINE, firstArg);
+	outputPort.write(MACHINE, "\n");
+    };
+    Primitives['displayln'].arity = [1, [2, NULL]];
+    Primitives['displayln'].displayName = 'displayln';
+
+    Primitives['pi'] = Math.PI;
+
+    Primitives['e'] = Math.E;
+
+    Primitives['='] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	testArgument(MACHINE, 'number', isNumber, firstArg, 0, '=');
+	for (var i = 0; i < MACHINE.argcount - 1; i++) {
+	    testArgument(MACHINE, 
+			 'number',
+			 isNumber, 
+			 MACHINE.env[MACHINE.env.length - 1 - i],
+			 i,
+			 '=');
+	    if (MACHINE.env[MACHINE.env.length - 1 - i] !==
+		MACHINE.env[MACHINE.env.length - 1 - i - 1]) {
+		return false; 
+	    }
+	}
+	return true;
+    };
+    Primitives['='].arity = new ArityAtLeast(2);
+    Primitives['='].displayName = '=';
+
+
+    Primitives['<'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	testArgument(MACHINE,
+		     'number', isNumber, firstArg, 0, '<');
+	for (var i = 0; i < MACHINE.argcount - 1; i++) {
+	    testArgument(MACHINE, 
+			 'number',
+			 isNumber, 
+			 MACHINE.env[MACHINE.env.length - 1 - i],
+			 i,
+			 '<');
+	    if (! (MACHINE.env[MACHINE.env.length - 1 - i] <
+		   MACHINE.env[MACHINE.env.length - 1 - i - 1])) {
+		return false; 
+	    }
+	}
+	return true;
+    };
+    Primitives['<'].arity = new ArityAtLeast(2);
+    Primitives['<'].displayName = '<';
+
+    Primitives['>'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	testArgument(MACHINE,
+		     'number', isNumber, firstArg, 0, '>');
+	for (var i = 0; i < MACHINE.argcount - 1; i++) {
+	    testArgument(MACHINE,
+			 'number',
+			 isNumber, 
+			 MACHINE.env[MACHINE.env.length - 1 - i],
+			 i,
+			 '>');
+	    if (! (MACHINE.env[MACHINE.env.length - 1 - i] >
+		   MACHINE.env[MACHINE.env.length - 1 - i - 1])) {
+		return false; 
+	    }
+	}
+	return true;
+    };
+    Primitives['>'].arity = new ArityAtLeast(2);
+    Primitives['>'].displayName = '>';
+
+    Primitives['<='] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	testArgument(MACHINE,
+		     'number', isNumber, firstArg, 0, '<=');
+	for (var i = 0; i < MACHINE.argcount - 1; i++) {
+	    testArgument(MACHINE,
+			 'number',
+			 isNumber, 
+			 MACHINE.env[MACHINE.env.length - 1 - i],
+			 i,
+			 '<=');
+	    if (! (MACHINE.env[MACHINE.env.length - 1 - i] <=
+		   MACHINE.env[MACHINE.env.length - 1 - i - 1])) {
+		return false; 
+	    }
+	}
+	return true;
+    };
+    Primitives['<='].arity = new ArityAtLeast(2);
+    Primitives['<='].displayName = '<=';
+
+
+    Primitives['>='] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	testArgument(MACHINE,
+		     'number', isNumber, firstArg, 0, '>=');
+	for (var i = 0; i < MACHINE.argcount - 1; i++) {
+	    testArgument(MACHINE, 
+			 'number',
+			 isNumber, 
+			 MACHINE.env[MACHINE.env.length - 1 - i],
+			 i,
+			 '>=');
+	    if (! (MACHINE.env[MACHINE.env.length - 1 - i] >=
+		   MACHINE.env[MACHINE.env.length - 1 - i - 1])) {
+		return false; 
+	    }
+	}
+	return true;
+    };
+    Primitives['>='].arity = new ArityAtLeast(2);
+    Primitives['>='].displayName = '>=';
+    
+
+    Primitives['+'] = function(MACHINE) {
+	var result = 0;
+	var i = 0;
+	for (i=0; i < MACHINE.argcount; i++) {
+	    testArgument(MACHINE,
+			 'number',
+			 isNumber, 
+			 MACHINE.env[MACHINE.env.length - 1 - i],
+			 i,
+			 '+');
+	    result += MACHINE.env[MACHINE.env.length - 1 - i];
+	};
+	return result;
+    };
+    Primitives['+'].arity = new ArityAtLeast(0);
+    Primitives['+'].displayName = '+';
+    
+
+    Primitives['*'] = function(MACHINE) {
+	var result = 1;
+	var i = 0;
+	for (i=0; i < MACHINE.argcount; i++) {
+	    testArgument(MACHINE,
+			 'number',
+			 isNumber, 
+			 MACHINE.env[MACHINE.env.length - 1 - i],
+			 i,
+			 '*');
+	    result *= MACHINE.env[MACHINE.env.length - 1 - i];
+	}
+	return result;
+    };
+    Primitives['*'].arity = new ArityAtLeast(0);
+    Primitives['*'].displayName = '*';
+    
+    Primitives['-'] = function(MACHINE) {
+	if (MACHINE.argcount === 1) { 
+	    testArgument(MACHINE,
+			 'number',
+			 isNumber,
+			 MACHINE.env[MACHINE.env.length-1],
+			 0,
+			 '-');
+	    return -(MACHINE.env[MACHINE.env.length-1]);
+	}
+	var result = MACHINE.env[MACHINE.env.length - 1];
+	for (var i = 1; i < MACHINE.argcount; i++) {
+	    testArgument(MACHINE,
+			 'number',
+			 isNumber,
+			 MACHINE.env[MACHINE.env.length-1-i],
+			 i,
+			 '-');
+	    result -= MACHINE.env[MACHINE.env.length - 1 - i];
+	}
+	return result;
+    };
+    Primitives['-'].arity = new ArityAtLeast(1);
+    Primitives['-'].displayName = '-';
+    
+    Primitives['/'] = function(MACHINE) {
+	testArgument(MACHINE,
+		     'number',
+		     isNumber,
+		     MACHINE.env[MACHINE.env.length - 1],
+		     0,
+		     '/');
+	var result = MACHINE.env[MACHINE.env.length - 1];
+	for (var i = 1; i < MACHINE.argcount; i++) {
+	    testArgument(MACHINE,
+			 'number',
+			 isNumber,
+			 MACHINE.env[MACHINE.env.length-1-i],
+			 i,
+			 '/');
+	    result /= MACHINE.env[MACHINE.env.length - 1 - i];
+	}
+	return result;
+    };
+    Primitives['/'].arity = new ArityAtLeast(1);
+    Primitives['/'].displayName = '/';
+    
+
+    Primitives['cons'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	var secondArg = MACHINE.env[MACHINE.env.length-2];
+	return [firstArg, secondArg];
+    };
+    Primitives['cons'].arity = 2;
+    Primitives['cons'].displayName = 'cons';
+
+
+    Primitives['list'] = function(MACHINE) {
+	var result = NULL;
+	for (var i = 0; i < MACHINE.argcount; i++) {
+	    result = [MACHINE.env[MACHINE.env.length - (MACHINE.argcount - i)],
+		      result];
+	}
+	return result;
+    };
+    Primitives['list'].arity = new ArityAtLeast(0);
+    Primitives['list'].displayName = 'list';
+
+    Primitives['car'] = function(MACHINE) {
+	testArgument(MACHINE, 
+		     'pair',
+		     isPair,
+		     MACHINE.env[MACHINE.env.length - 1],
+		     0,
+		     'car');
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	return firstArg[0];
+    };
+    Primitives['car'].arity = 1;
+    Primitives['car'].displayName = 'car';
+
+    Primitives['cdr'] = function(MACHINE) {
+	testArgument(MACHINE,
+		     'pair',
+		     isPair,
+		     MACHINE.env[MACHINE.env.length - 1],
+		     0,
+		     'cdr');
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	return firstArg[1];
+    };
+    Primitives['cdr'].arity = 1;
+    Primitives['cdr'].displayName = 'cdr';
+
+    Primitives['pair?'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	return isPair(firstArg);
+    };
+    Primitives['pair?'].arity = 1;
+    Primitives['pair?'].displayName = 'pair?';
+
+    Primitives['set-car!'] = function(MACHINE) {
+	testArgument(MACHINE,
+		     'pair',
+		     isPair,
+		     MACHINE.env[MACHINE.env.length - 1],
+		     0,
+		     'set-car!');
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	var secondArg = MACHINE.env[MACHINE.env.length-2];
+	firstArg[0] = secondArg;
+    };
+    Primitives['set-car!'].arity = 2;
+    Primitives['set-car!'].displayName = 'set-car!';
+
+    Primitives['set-cdr!'] = function(MACHINE) {
+	testArgument(MACHINE,
+		     'pair',
+		     isPair,
+		     MACHINE.env[MACHINE.env.length - 1],
+		     0,
+		     'set-cdr!');
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	var secondArg = MACHINE.env[MACHINE.env.length-2];
+	firstArg[1] = secondArg;
+    };
+    Primitives['set-cdr!'].arity = 2;
+    Primitives['set-cdr!'].displayName = 'set-cdr!';
+    
+    Primitives['not'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	return (firstArg === false);
+    };
+    Primitives['not'].arity = 1;
+    Primitives['not'].displayName = 'not';
+
+    Primitives['null'] = NULL;
+
+    Primitives['null?'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	return firstArg === NULL;
+    };
+    Primitives['null?'].arity = 1;
+    Primitives['null?'].displayName = 'null?';
+
+    Primitives['add1'] = function(MACHINE) {
+	testArgument(MACHINE,
+		     'number',
+		     isNumber,
+		     MACHINE.env[MACHINE.env.length - 1],
+		     0,
+		     'add1');
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	return firstArg + 1;
+    };
+    Primitives['add1'].arity = 1;
+    Primitives['add1'].displayName = 'add1';
+
+    Primitives['sub1'] = function(MACHINE) {
+	testArgument(MACHINE,
+		     'number',
+		     isNumber,
+		     MACHINE.env[MACHINE.env.length - 1],
+		     0,
+		     'sub1');
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	return firstArg - 1;
+    };
+    Primitives['sub1'].arity = 1;
+    Primitives['sub1'].displayName = 'sub1';
+
+    Primitives['zero?'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	return firstArg === 0;
+    };
+    Primitives['zero?'].arity = 1;
+    Primitives['zero?'].displayName = 'zero?';
+
+    Primitives['vector'] = function(MACHINE) {
+	var i;
+	var result = [];
+	for (i = 0; i < MACHINE.argcount; i++) {
+	    result.push(MACHINE.env[MACHINE.env.length-1-i]);
+	}
+	result.type = 'vector';
+	return result;
+    };
+    Primitives['vector'].arity = new ArityAtLeast(0);
+    Primitives['vector'].displayName = 'vector';
+
+    Primitives['vector->list'] = function(MACHINE) {
+	testArgument(MACHINE,
+		     'vector',
+		     isVector,
+		     MACHINE.env[MACHINE.env.length - 1],
+		     0,
+		     'vector->list');
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	var i;
+	var result = NULL;
+	for (i = 0; i < firstArg.length; i++) {
+	    result = [firstArg[firstArg.length - 1 - i], result];
+	}
+	return result;
+    };
+    Primitives['vector->list'].arity = 1;
+    Primitives['vector->list'].displayName = 'vector->list';
+    
+    Primitives['list->vector'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	var result = [];
+	while (firstArg !== NULL) {
+	    result.push(firstArg[0]);
+	    firstArg = firstArg[1];
+	}
+	result.type='vector';
+	return result;
+    };
+    Primitives['list->vector'].arity = 1;
+    Primitives['list->vector'].displayName = 'list->vector';
+
+    Primitives['vector-ref'] = function(MACHINE) {
+	testArgument(MACHINE,
+		     'vector',
+		     isVector,
+		     MACHINE.env[MACHINE.env.length - 1],
+		     0,
+		     'vector-ref');
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	var secondArg = MACHINE.env[MACHINE.env.length-2];
+	return firstArg[secondArg];
+    };
+    Primitives['vector-ref'].arity = 2;
+    Primitives['vector-ref'].displayName = 'vector-ref';
+
+    Primitives['vector-set!'] = function(MACHINE) {
+	testArgument(MACHINE,
+		     'vector',
+		     isVector,
+		     MACHINE.env[MACHINE.env.length - 1],
+		     0,
+		     'vector-set!');
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	var secondArg = MACHINE.env[MACHINE.env.length-2];
+	var thirdArg = MACHINE.env[MACHINE.env.length-3];
+	firstArg[secondArg] = thirdArg;
+	return null;
+    };
+    Primitives['vector-set!'].arity = 3;
+    Primitives['vector-set!'].displayName = 'vector-set!';
+
+
+    Primitives['vector-length'] = function(MACHINE) {
+	testArgument(MACHINE,
+		     'vector',
+		     isVector,
+		     MACHINE.env[MACHINE.env.length - 1],
+		     0,
+		     'vector-length');
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	return firstArg.length;
+    };
+    Primitives['vector-length'].arity = 1;
+    Primitives['vector-length'].displayName = 'vector-length';
+
+
+    Primitives['make-vector'] = function(MACHINE) {
+	var value = 0;
+	testArgument(MACHINE,
+		     'natural',
+		     isNatural,
+		     MACHINE.env[MACHINE.env.length - 1],
+		     0,
+		     'make-vector');
+	if (MACHINE.argcount == 2) {
+	    value = MACHINE.env[MACHINE.env.length - 2];
+	}
+	var length = MACHINE.env[MACHINE.env.length-1];
+	var arr = [];
+	for(var i = 0; i < length; i++) {
+	    arr[i] = value;
+	}
+	arr.type='vector';
+	return arr;
+    };
+    Primitives['make-vector'].arity = [1, [2, NULL]];
+    Primitives['make-vector'].displayName = 'make-vector';
+
+
+    
+
+
+    Primitives['symbol?'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	return typeof(firstArg) === 'string';
+    };
+    Primitives['symbol?'].arity = 1;
+    Primitives['symbol?'].displayName = 'symbol?';
+
+    Primitives['symbol->string'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	return firstArg;
+    };
+    Primitives['symbol->string'].arity = 1;
+    Primitives['symbol->string'].displayName = 'symbol->string';
+
+    Primitives['string-append'] = function(MACHINE) {
+	var buffer = [];
+	var i;
+	for (i = 0; i < MACHINE.argcount; i++) {
+	    buffer.push(MACHINE.env[MACHINE.env.length - 1 - i]);
+	}
+	return buffer.join('');
+    };
+    Primitives['string-append'].arity = new ArityAtLeast(0);
+    Primitives['string-append'].displayName = 'string-append';
+
+    Primitives['string-length'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	return firstArg.length;
+    };
+    Primitives['string-length'].arity = 1;
+    Primitives['string-length'].displayName = 'string-length';
+    
+    Primitives['box'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	var result = [firstArg];
+	return result;
+    };
+    Primitives['box'].arity = 1;
+    Primitives['box'].displayName = 'box';
+
+    Primitives['unbox'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	return firstArg[0];
+    };
+    Primitives['unbox'].arity = 1;
+    Primitives['unbox'].displayName = 'unbox';
+
+    Primitives['set-box!'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	var secondArg = MACHINE.env[MACHINE.env.length-2];
+	firstArg[0] = secondArg;
+	return;
+    };
+    Primitives['set-box!'].arity = 2;
+    Primitives['set-box!'].displayName = 'set-box!';
+
+    Primitives['void'] = function(MACHINE) {
+	return;
+    };
+    Primitives['void'].arity = new ArityAtLeast(0);
+    Primitives['void'].displayName = 'void';
+
+    Primitives['eq?'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	var secondArg = MACHINE.env[MACHINE.env.length-2];
+	return firstArg === secondArg;
+    };
+    Primitives['eq?'].arity = 2;
+    Primitives['eq?'].displayName = 'eq?';
+
+    Primitives['equal?'] = function(MACHINE) {
+	var firstArg = MACHINE.env[MACHINE.env.length-1];
+	var secondArg = MACHINE.env[MACHINE.env.length-2];
+	return isEqual(firstArg, secondArg);
+    };
+    Primitives['equal?'].arity = 2;
+    Primitives['equal?'].displayName = 'equal?';
+
+
+
+    var isEqual = function(firstArg, secondArg) {
+	var lset = [firstArg], rset = [secondArg];
+	while (lset.length !== 0 && rset.length !== 0) {
+	    var lhs = lset.pop();
+	    var rhs = rset.pop();
+	    if (lhs === rhs) {
+		continue;
+	    } else if (typeof(lhs) === 'object' &&
+		       typeof(rhs) === 'object' &&
+		       typeof(lhs.length) === 'number' &&
+		       typeof(rhs.length) === 'number' &&
+		       lhs.length === rhs.length) {
+		lset.push.apply(lset, lhs);
+		rset.push.apply(rset, rhs);
+	    } else {
+		return false;
+	    }
+	}
+	return true;
+    };
+
+
+    Primitives['member'] = function(MACHINE) {
+	var x = MACHINE.env[MACHINE.env.length-1];
+	var lst = MACHINE.env[MACHINE.env.length-2];
+	var originalLst = lst;
+	while (true) {
+	    if (! isList(lst)) {
+		raise(MACHINE, new Error("member: expected list" 
+					 + " as argument #2"
+					 + " but received " + originalLst + " instead"));
+	    }
+	    if (lst === NULL) {
+		return false;
+	    }
+	    if (isEqual(x, (lst[0]))) {
+		return lst;
+	    }
+	    lst = lst[1];
+	}	
+    };
+    Primitives['member'].arity = 2;
+    Primitives['member'].displayName = 'member';
+
+
+
+    Primitives['reverse'] = function(MACHINE) {
+	var rev = NULL;
+	var lst = MACHINE.env[MACHINE.env.length-1];
+	while(lst !== NULL) {
+	    testArgument(MACHINE,
+			 'pair', isPair, lst, 0, 'reverse');
+	    rev = [lst[0], rev];
+	    lst = lst[1];
+	}
+	return rev;
+    };
+    Primitives['reverse'].arity = 1;
+    Primitives['reverse'].displayName = 'reverse';
+
+
+
+    Primitives['print-values'] = new Closure(
+        function(MACHINE) {
+	    var outputPort = MACHINE.params.currentOutputPort;
+            if (MACHINE.argcount > 0) {
+	        outputPort.write(MACHINE, MACHINE.val);
+	        outputPort.write(MACHINE, "\n");
+
+                for(var i = 0; i < MACHINE.argcount - 1; i++) {
+	            outputPort.write(MACHINE, "\n");
+                    outputPort.write(MACHINE,
+                                     MACHINE.env[MACHINE.env.length - 1 - i]);
+                }
+	        outputPort.write(MACHINE, "\n");
+            }
+            MACHINE.env.length = MACHINE.env.length - (MACHINE.argcount - 1);
+            var point = MACHINE.control.pop();
+            throw point.label;
+        },
+        new ArityAtLeast(0),
+        [],
+        "print-values"
+    );
+
+
+
+
+
+
+
+    // recomputeGas: state number -> number
+    var recomputeMaxNumBouncesBeforeYield = function(MACHINE, observedDelay) {
+	// We'd like to see a delay of DESIRED_DELAY_BETWEEN_BOUNCES so
+	// that we get MACHINE.params.desiredYieldsPerSecond bounces per
+	// second.
+	var DESIRED_DELAY_BETWEEN_BOUNCES = 
+	    (1000 / MACHINE.params.desiredYieldsPerSecond);
+	var ALPHA = 256;
+	var delta = (ALPHA * ((DESIRED_DELAY_BETWEEN_BOUNCES -
+			       observedDelay) / 
+			      DESIRED_DELAY_BETWEEN_BOUNCES));
+	MACHINE.params.maxNumBouncesBeforeYield = 
+            Math.max(MACHINE.params.maxNumBouncesBeforeYield + delta,
+                     1);
+    };
+
+
+
+
+    var trampoline = function(MACHINE, initialJump) {
+	var thunk = initialJump;
+	var startTime = (new Date()).valueOf();
+	MACHINE.callsBeforeTrampoline = STACK_LIMIT_ESTIMATE;
+	MACHINE.params.numBouncesBeforeYield = 
+	    MACHINE.params.maxNumBouncesBeforeYield;
+	MACHINE.running = true;
+
+	while(thunk) {
+            try {
+		thunk(MACHINE);
+		break;
+            } catch (e) {
+		if (typeof(e) === 'function') {
+                    thunk = e;
+                    MACHINE.callsBeforeTrampoline = STACK_LIMIT_ESTIMATE;
+
+		    if (MACHINE.params.numBouncesBeforeYield-- < 0) {
+			recomputeMaxNumBouncesBeforeYield(
+			    MACHINE,
+			    (new Date()).valueOf() - startTime);
+			setTimeout(
+			    function() {
+				trampoline(MACHINE, thunk);
+			    },
+			    0);
+			return;
+		    }
+		} else if (e instanceof HaltMachine) {
+                    return;
+                } else {
+		    MACHINE.running = false;
+	            return MACHINE.params.currentErrorHandler(MACHINE, e);
+		}
+            }
+	}
+	MACHINE.running = false;
+	return MACHINE.params.currentSuccessHandler(MACHINE);
+    };
+
+
+
+
+    // Approximately find the stack limit.
+    // This function assumes, on average, five variables or
+    // temporaries per stack frame.
+    // This will never report a number greater than MAXIMUM_CAP.
+    var findStackLimit = function(after) {
+	var MAXIMUM_CAP = 100000;
+	var n = 1;
+	var limitDiscovered = false;
+	setTimeout(
+	    function() {
+		if(! limitDiscovered) {
+		    limitDiscovered = true;
+		    after(n);
+		}
+	    },
+	    0);
+	var loop1 = function(x, y, z, w, k) {
+	    // Ensure termination, just in case JavaScript ever
+	    // does eliminate stack limits.
+	    if (n >= MAXIMUM_CAP) { return; }
+	    n++;
+	    return 1 + loop2(y, z, w, k, x);
+	};
+	var loop2 = function(x, y, z, w, k) {
+	    n++;
+	    return 1 + loop1(y, z, w, k, x);
+	};
+	try {
+	    var dontCare = 1 + loop1(2, "seven", [1], {number: 8}, 2);
+	} catch (e) {
+	    // ignore exceptions.
+	}
+	if (! limitDiscovered) { 
+	    limitDiscovered = true;
+	    after(n);
+	}
+    };
+
+
+    // Schedule a stack limit estimation.  If it fails, no harm, no
+    // foul (hopefully!)
+    setTimeout(function() {
+	findStackLimit(function(v) {
+	    // Trying to be a little conservative.
+	    STACK_LIMIT_ESTIMATE = Math.floor(v / 2);
+	});
+    },
+	       0);
+
+
+
+
+    // Exports
+    exports['Machine'] = Machine;
+    exports['Frame'] = Frame;
+    exports['CallFrame'] = CallFrame;
+    exports['PromptFrame'] = PromptFrame;
+    exports['Closure'] = Closure;
+    exports['ModuleRecord'] = ModuleRecord;
+    exports['VariableReference'] = VariableReference;
+    exports['ContinuationPromptTag'] = ContinuationPromptTag;
+    exports['DEFAULT_CONTINUATION_PROMPT_TAG'] = 
+	DEFAULT_CONTINUATION_PROMPT_TAG;
+    exports['NULL'] = NULL;
+
+    exports['testArgument'] = testArgument;
+    exports['testArity'] = testArity;
+    exports['raise'] = raise;
+    exports['raiseContextExpectedValuesError'] = raiseContextExpectedValuesError;
+
+
+    exports['captureControl'] = captureControl;
+    exports['restoreControl'] = restoreControl;
+
+    exports['trampoline'] = trampoline;
+    exports['spliceListIntoStack'] = spliceListIntoStack;
+    exports['unspliceRestFromStack'] = unspliceRestFromStack;
+
+
+    exports['isNumber'] = isNumber;
+    exports['isNatural'] = isNatural;
+    exports['isPair'] = isPair;
+    exports['isList'] = isList;
+    exports['isVector'] = isVector;
+    exports['isOutputPort'] = isOutputPort;
+    exports['isOutputStringPort'] = isOutputStringPort;
+    exports['isEqual'] = isEqual;
+
+    exports['ArityAtLeast'] = ArityAtLeast;
+    exports['isArityMatching'] = isArityMatching;
+
+    exports['heir'] = heir;
+    exports['makeClassPredicate'] = makeClassPredicate;
+
+
+
+}).call(this);
+]]>
+<![CDATA[
+var mainModule = (function(MACHINE, success, fail, params) {
+var param;
+var RUNTIME = plt.runtime;
+var _start25=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _start25; }
+return (_afterLamBodies1)(MACHINE);};
+
+var _afterLamBodies1=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _afterLamBodies1; }
+MACHINE.control.push(new RUNTIME.PromptFrame(_beforePopPrompt3, RUNTIME.DEFAULT_CONTINUATION_PROMPT_TAG));
+MACHINE.env.push([false]);  MACHINE.env[MACHINE.env.length-1].names = [false];
+MACHINE.modules["self"]=new RUNTIME.ModuleRecord("hello", _moduleEntry5);
+return (_afterModuleBody4)(MACHINE);};
+
+var _moduleEntry5=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _moduleEntry5; }
+if ((MACHINE.modules["whalesong/lang/kernel.rkt"] !== undefined) !== false) { return (_linked6)(MACHINE); }
+    MACHINE.params.currentOutputPort.write(MACHINE, "DEBUG: the module whalesong/lang/kernel.rkt hasn't been linked in!!!");
+return (_alreadyLoaded7)(MACHINE);};
+
+var _linked6=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _linked6; }
+if (MACHINE.modules["whalesong/lang/kernel.rkt"].label !== false) { return (_alreadyLoaded7)(MACHINE); }
+MACHINE.control.push(new RUNTIME.CallFrame(_onReturn9, MACHINE.proc));
+return (MACHINE.modules["whalesong/lang/kernel.rkt"].label)(MACHINE);};
+
+var _onReturnMultiple8=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _onReturnMultiple8; }
+MACHINE.env.length = MACHINE.env.length - (MACHINE.argcount - (1));
+return (_onReturn9)(MACHINE);};
+
+var _onReturn9=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _onReturn9; }
+return (_alreadyLoaded7)(MACHINE);};
+
+var _alreadyLoaded7=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _alreadyLoaded7; }
+MACHINE.env.push([MACHINE.primitives["displayln"],MACHINE.primitives["print-values"]]);  MACHINE.env[MACHINE.env.length-1].names = ["displayln","print-values"];
+MACHINE.control.push(new RUNTIME.PromptFrame(_beforePromptPop11, RUNTIME.DEFAULT_CONTINUATION_PROMPT_TAG));
+MACHINE.control.push(new RUNTIME.Frame());
+
+if (MACHINE.env[MACHINE.env.length - 1 - 0][1] === undefined) { throw new Error("Not bound: " + MACHINE.env[MACHINE.env.length - 1 - 0].names[1]); }
+MACHINE.control[MACHINE.control.length-1].pendingApplyValuesProc = MACHINE.env[MACHINE.env.length - 1 - 0][1];
+
+MACHINE.env.push(undefined);
+
+if (MACHINE.env[MACHINE.env.length - 1 - 1][0] === undefined) { throw new Error("Not bound: " + MACHINE.env[MACHINE.env.length - 1 - 1].names[0]); }
+MACHINE.env[MACHINE.env.length - 1 - 0] = MACHINE.env[MACHINE.env.length - 1 - 1][0];
+MACHINE.val = "hello world\n";
+MACHINE.proc = MACHINE.env[MACHINE.env.length - 1 - 0];
+MACHINE.env[MACHINE.env.length - 1 - 0] = MACHINE.val;
+MACHINE.argcount = (1);
+if (typeof(MACHINE.proc) === 'function') { return (_primitiveBranch14)(MACHINE); }
+if (! (MACHINE.proc instanceof RUNTIME.Closure && RUNTIME.isArityMatching(MACHINE.proc.arity, MACHINE.argcount))) { if (! (MACHINE.proc instanceof RUNTIME.Closure)) { throw new Error("not a closure"); } else { throw new Error("arity failure:" + MACHINE.proc.displayName); } }
+MACHINE.control.push(new RUNTIME.CallFrame(_procReturn18, MACHINE.proc));
+return ((MACHINE.proc).label)(MACHINE);};
+
+var _procReturnMultiple17=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _procReturnMultiple17; }
+return (_afterReturn19)(MACHINE);};
+
+var _procReturn18=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _procReturn18; }
+MACHINE.argcount = (1);
+return (_afterReturn19)(MACHINE);};
+
+var _afterReturn19=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _afterReturn19; }
+return (_afterCall16)(MACHINE);};
+
+var _primitiveBranch14=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _primitiveBranch14; }
+if (! (typeof(MACHINE.proc) === 'function'  && RUNTIME.isArityMatching(MACHINE.proc.arity, MACHINE.argcount))) { if (! (typeof(MACHINE.proc) === 'function')) { throw new Error("not a primitive procedure"); } else { throw new Error("arity failure:" + MACHINE.proc.displayName); } }
+MACHINE.val=MACHINE.proc(MACHINE);
+MACHINE.env.length = MACHINE.env.length - MACHINE.argcount;
+MACHINE.argcount = (1);
+return (_afterCall16)(MACHINE);};
+
+var _afterCall16=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _afterCall16; }
+if (MACHINE.argcount === 0) { return (_afterArgsEvaluated13)(MACHINE); }
+MACHINE.env.push(MACHINE.val);
+return (_afterArgsEvaluated13)(MACHINE);};
+
+var _afterArgsEvaluated13=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _afterArgsEvaluated13; }
+MACHINE.proc = MACHINE.control[MACHINE.control.length-1].pendingApplyValuesProc;
+MACHINE.control.pop();
+if (typeof(MACHINE.proc) === 'function') { return (_primitiveBranch20)(MACHINE); }
+if (! (MACHINE.proc instanceof RUNTIME.Closure && RUNTIME.isArityMatching(MACHINE.proc.arity, MACHINE.argcount))) { if (! (MACHINE.proc instanceof RUNTIME.Closure)) { throw new Error("not a closure"); } else { throw new Error("arity failure:" + MACHINE.proc.displayName); } }
+MACHINE.control.push(new RUNTIME.CallFrame(_procReturn24, MACHINE.proc));
+return ((MACHINE.proc).label)(MACHINE);};
+
+var _procReturnMultiple23=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _procReturnMultiple23; }
+MACHINE.env.length = MACHINE.env.length - (MACHINE.argcount - (1));
+return (_procReturn24)(MACHINE);};
+
+var _procReturn24=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _procReturn24; }
+return (_afterCall22)(MACHINE);};
+
+var _primitiveBranch20=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _primitiveBranch20; }
+if (! (typeof(MACHINE.proc) === 'function'  && RUNTIME.isArityMatching(MACHINE.proc.arity, MACHINE.argcount))) { if (! (typeof(MACHINE.proc) === 'function')) { throw new Error("not a primitive procedure"); } else { throw new Error("arity failure:" + MACHINE.proc.displayName); } }
+MACHINE.val=MACHINE.proc(MACHINE);
+MACHINE.env.length = MACHINE.env.length - MACHINE.argcount;
+return (_afterCall22)(MACHINE);};
+
+var _afterCall22=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _afterCall22; }
+MACHINE.proc = MACHINE.control[MACHINE.control.length-1].label;
+MACHINE.control.pop();
+return (MACHINE.proc)(MACHINE);};
+
+var _beforePromptPopMultiple10=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _beforePromptPopMultiple10; }
+MACHINE.env.length = MACHINE.env.length - (MACHINE.argcount - (1));
+return (_beforePromptPop11)(MACHINE);};
+
+var _beforePromptPop11=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _beforePromptPop11; }
+MACHINE.val = MACHINE.val;
+MACHINE.env.length = MACHINE.env.length - (1);
+MACHINE.proc = MACHINE.control[MACHINE.control.length-1].label;
+MACHINE.control.pop();
+return (MACHINE.proc)(MACHINE);};
+
+var _afterModuleBody4=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _afterModuleBody4; }
+MACHINE.val = MACHINE.val;
+MACHINE.env.length = MACHINE.env.length - (1);
+MACHINE.proc = MACHINE.control[MACHINE.control.length-1].label;
+MACHINE.control.pop();
+return (MACHINE.proc)(MACHINE);};
+
+var _beforePopPromptMultiple2=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _beforePopPromptMultiple2; }
+MACHINE.env.length = MACHINE.env.length - MACHINE.argcount;
+return (_beforePopPrompt3)(MACHINE);};
+
+var _beforePopPrompt3=function(MACHINE){
+if(--MACHINE.callsBeforeTrampoline < 0) { throw _beforePopPrompt3; }
+};
+
+_onReturn9.multipleValueReturn = _onReturnMultiple8;
+_procReturn18.multipleValueReturn = _procReturnMultiple17;
+_procReturn24.multipleValueReturn = _procReturnMultiple23;
+_beforePromptPop11.multipleValueReturn = _beforePromptPopMultiple10;
+_beforePopPrompt3.multipleValueReturn = _beforePopPromptMultiple2;
+MACHINE.params.currentErrorHandler = fail;
+MACHINE.params.currentSuccessHandler = success;
+for (param in params) {
+    if (params.hasOwnProperty(param)) {
+        MACHINE.params[param] = params[param];
+    }
+}RUNTIME.trampoline(MACHINE, _start25); })
+]]>
+
+
+var MY_MACHINE = new plt.runtime.Machine();
+var invokeMainModule = function() {
+    mainModule(MY_MACHINE,
+               function() { 
+                   MY_MACHINE.modules['self'].invoke(
+                       MY_MACHINE,
+                       function() {
+                           console.log("ok2")
+                       },
+                       function(MACHINE, e) {
+                           console.log("bad2");
+                           console.log(e.stack);
+                       }); 
+               },
+               function() { console.log('fail'); },
+               { currentDisplayer : function(v) {
+                   document.body.appendChild(document.createTextNode(String(v))); 
+               }});
+};
+</script>
+<body onload='invokeMainModule()'>
+</body>
+</html>

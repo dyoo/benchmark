@@ -1,14 +1,13 @@
 #lang racket
 
-(require "simulator.rkt"
-         "simulator-structs.rkt"
-         "compiler.rkt"
-         "parse.rkt"
-         "il-structs.rkt")
+(require "../simulator/simulator.rkt"
+         "../simulator/simulator-structs.rkt"
+         "test-helpers.rkt"
+         racket/runtime-path)
+
+(define-runtime-path earley-path (build-path "earley"))
 
 
-(define (run-compiler code)
-  (compile (parse code) 'val next-linkage/drop-multiple))
   
 ;; run: machine -> (machine number)
 ;; Run the machine to completion.
@@ -56,7 +55,5 @@
              (printf "ok. ~s steps.\n\n" num-steps)))))]))
 
 
-(test (read (open-input-file "tests/earley/earley.sch"))
-      (port->string (open-input-file "tests/earley/expected.txt"))
-      ;;#:debug? #t
-      )
+(test (read (open-input-file (build-path earley-path "earley.sch")))
+      (port->string (open-input-file (build-path earley-path "expected.txt"))))
