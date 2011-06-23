@@ -1,0 +1,51 @@
+What is Whalesong?
+
+    Whalesong is a compiler from Racket bytecode to JavaScript.
+
+
+Why would anyone care?
+
+    * Because it allows Racket programs to be deployed on the web.
+
+    * Furthermore, Racket programs can access native JavaScript APIs.
+
+    * Because my previous attempt at this produced a slower evaluator;
+    this is much faster.
+
+
+What do you want to show?
+
+    I want to show the tool in action, programs that use it
+       - like World programming, FFI
+
+    I want to show performance numbers (which means benchmarks...)
+
+    I also want to show some of the internals, to show why the
+    JavaScript context makes things more complicated.
+
+
+How do you use it?
+
+    I have a command line tool that consumes Racket programs and
+    produces standalone JavaScript applications.
+
+    I'll be using this as the underlying evaluator for WeScheme
+
+       Why?  Performance.
+
+
+What were the technical advantages of your approach?
+
+    Reusing the Racket compiler.  Strong possibility of reusing most
+    of the Racket standard library, as soon as we can bootstrap
+    racket/base.
+
+What were some of the technical challenges?
+
+    Supporting the features of the Racket virtual machine (tail calls,
+    continuations)
+
+
+What needs to be done next?
+
+    Adding enough primitives to run racket/base

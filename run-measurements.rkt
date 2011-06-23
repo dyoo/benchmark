@@ -24,6 +24,7 @@
 
 
 (require (prefix-in racket: "platforms/racket/runner.rkt"))
+(require (prefix-in racket-no-jit: "platforms/racket-no-jit/runner.rkt"))
 (require (prefix-in browser: "platforms/js-sicp-5-5-browser/runner.rkt"))
 (require (prefix-in simulator: "platforms/js-sicp-5-5-simulator/runner.rkt"))
 (require (prefix-in whalesong: "platforms/whalesong/runner.rkt"))
@@ -32,7 +33,10 @@
 
 
 (define-struct platform (name runner))
-(define all-platforms (list (make-platform "racket" (delay (racket:make-run)))
+(define all-platforms (list (make-platform "racket"
+                                           (delay (racket:make-run)))
+                            (make-platform "racket-no-jit"
+                                           (delay (racket-no-jit:make-run)))
                             #;(make-platform "simulator" (delay (simulator:make-run)))
                             (make-platform 
 			     "js-vm" 

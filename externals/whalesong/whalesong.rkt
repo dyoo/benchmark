@@ -2,11 +2,11 @@
 #lang racket/base
 
 (require racket/list
-         racket/match
          racket/string
-         racket/path
-         "make-structs.rkt"
-         "js-assembler/package.rkt")
+         "make/make-structs.rkt"
+         "js-assembler/package.rkt"
+         "private/command.rkt"
+         raco/command-name)
 
 
 ;; Usage:
@@ -27,59 +27,41 @@
 
 
 
-;; TODO: error trapping
-(define commands `((build 
-                    ,(lambda (args)
-                      (do-the-build args)))
-                   (get-runtime 
-                    ,(lambda (args)
-                      (print-the-runtime)))
-                   (get-javascript
-                    ,(lambda (args)
-                       (get-javascript-code (first args))))))
-
-
-;; listof string
-(define command-names (map (lambda (x) (symbol->string (car x)))
-                           commands))
-
-
-(define (print-expected-command)
-  (printf "Expected one of the following: [~a].\n"
-          (string-join command-names ", ")))
 
 (define (at-toplevel)
-  (define args (vector->list (current-command-line-arguments)))
-  (cond [(empty? args)
-         (print-expected-command)]
-        [else
-         (cond
-          [(assoc (string->symbol (first args))
-                  commands)
-           =>
-           (lambda (p)
-             ((cadr p) (rest args)))]
-          [else
-           (printf "Unknown command ~s.\n" (first args))
-           (print-expected-command)])]))
+  (svn-style-command-line
+   #:program "whalesong" #;(short-program+command-name)
+   #:argv (current-command-line-arguments)
+   "The Whalesong command-line tool for compiling Racket to JavaScript"
+   ["build" "build a standalone xhtml package" 
+            "Builds a Racket program and its required dependencies into a standalone .xhtml file."
+            #:args (path)
+            (do-the-build path)]
+   ["get-runtime" "print the runtime library to standard output"
+                  "Prints the runtime JavaScript library that's used by Whalesong programs."
+                  #:args ()
+                  (print-the-runtime)]
+   ["get-javascript" "Gets just the JavaScript code and prints it to standard output"
+                     "Builds a racket program into JavaScript.  The outputted file depends on the runtime."
+                     #:args (file)
+                     (get-javascript-code file)]))
 
 
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 
 
-(define (do-the-build filenames)
-  (for ([f filenames])
-       (let-values ([(base filename dir?)
-                     (split-path f)])
-         (let ([output-filename
-                (build-path
-                 (regexp-replace #rx"[.](rkt|ss)$" (path->string filename) ".xhtml"))])
-           (call-with-output-file* output-filename
-                                   (lambda (op)
-                                     (package-standalone-xhtml
-                                      (make-ModuleSource (build-path f))
-                                      op))
-                                   #:exists 'replace)))))
+(define (do-the-build f)
+  (let-values ([(base filename dir?)
+                (split-path f)])
+    (let ([output-filename
+           (build-path
+            (regexp-replace #rx"[.](rkt|ss)$" (path->string filename) ".xhtml"))])
+      (call-with-output-file* output-filename
+                              (lambda (op)
+                                (package-standalone-xhtml
+                                 (make-ModuleSource (build-path f))
+                                 op))
+                              #:exists 'replace))))
 
 
 

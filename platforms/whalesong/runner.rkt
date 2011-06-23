@@ -2,7 +2,7 @@
 (require "../../measurement-struct.rkt"
          "../../get-host-info.rkt"
          "../../externals/whalesong/tests/browser-evaluate.rkt"
-         "../../externals/whalesong/make-structs.rkt"
+         "../../externals/whalesong/make/make-structs.rkt"
          "../../externals/whalesong/js-assembler/package.rkt"
          racket/runtime-path
          racket/port)

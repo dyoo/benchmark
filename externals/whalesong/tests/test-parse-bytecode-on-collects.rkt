@@ -2,13 +2,14 @@
 
 ;; Tries to parse all the files in collects and sees how long it takes.
 ;;
-;; TODO: figure out why it fails to get the module bytecode for
-;; collects/tests/matrix-test.rkt.  I'm seeing the following:
-;; read-syntax: cannot load snip-class reader
+;; Files that take too long get categorized as timeouts.
+
 
 (require "../parser/parse-bytecode.rkt"
+         "../call-with-timeout.rkt"
          racket/list
          racket/path)
+
 
 (define collects-dir 
   (normalize-path
@@ -20,6 +21,8 @@
        [else
         p]))))
 
+
+
 (define failures '())
 
 (for ([path (in-directory collects-dir)])
@@ -28,11 +31,21 @@
     (flush-output)
     (let ([start-time (current-inexact-milliseconds)])
       (with-handlers ((exn:fail? (lambda (exn)
-                                   (set! failures (cons path failures))
-                                   (printf "FAILED!  ~a" (exn-message exn)))))
-        (void (parse-bytecode path))
+                                   (set! failures
+                                         (cons (list (path->string path)
+                                                     (exn-message exn))
+                                               failures))
+                                   (printf "FAILED: ~a\n" (exn-message exn)))))
+        (call-with-timeout (lambda ()
+                             (void (parse-bytecode path)))
+                           ;; timeout
+                           1000)
         (let ([end-time (current-inexact-milliseconds)])
           (printf "~a msecs\n" (inexact->exact (floor (- end-time start-time)))))))))
 
+
+
 (unless (empty? failures)
-  (printf "Failed on: ~s" failures))
+  (printf "Failed on:\n")
+  (for ([f failures])
+    (printf "~s\n" f)))
