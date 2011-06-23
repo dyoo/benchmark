@@ -36,7 +36,7 @@
                       
                       (fprintf op "var innerInvoke = ")
                       (package-anonymous program
-                                         #:should-follow? (lambda (p) #t)
+                                         #:should-follow-children? (lambda (src) #t)
                                          #:output-port op)
                       (fprintf op "();\n")
                       
