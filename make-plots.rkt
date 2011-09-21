@@ -371,13 +371,13 @@ EOF
                      ;"C0C0C0" ;; silver
                      ;"808080" ;; gray
                      "FF0000" ;; red
-                     ;"FFFF00" ;; yellow
+                     "FFFF00" ;; yellow
                      "808000" ;; olive
-                     ;"008000" ;; green
+                     "008000" ;; green
                      "000000" ;; black
                      "0000FF" ;; blue
                      "800000" ;; maroon
-                     ;"00FF00" ;; lime
+                     "00FF00" ;; lime
                      ;"00FFFF" ;; aqua
                      "008080" ;; teal
 
