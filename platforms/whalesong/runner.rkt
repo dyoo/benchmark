@@ -1,10 +1,11 @@
 #lang racket/base
 (require "../../measurement-struct.rkt"
          "../../get-host-info.rkt"
-         "../../externals/whalesong/tests/browser-evaluate.rkt"
-         "../../externals/whalesong/make/make-structs.rkt"
-         "../../externals/whalesong/js-assembler/package.rkt"
+         (planet dyoo/whalesong/make/make-structs)
+         (planet dyoo/whalesong/js-assembler/package)
+         (planet dyoo/browser-evaluate)
          racket/runtime-path
+         racket/path
          racket/port)
 
 
@@ -31,35 +32,36 @@
                       
                       ;; The runtime code
                       (write-runtime op)
-                      
                       (newline op)
-                      
-                      (fprintf op "var innerInvoke = ")
-                      (package-anonymous program
-                                         #:should-follow-children? (lambda (src) #t)
-                                         #:output-port op)
-                      (fprintf op "();\n")
-                      
+                      (fprintf op "var machine = new plt.runtime.Machine();")
+                      (fprintf op "plt.runtime.currentMachine = machine;");
+                      (package program
+                               #:should-follow-children? (lambda (src) #t)
+                               #:output-port op)
                       (fprintf op #<<EOF
 return (function(succ, fail, params) {
-            return innerInvoke(new plt.runtime.Machine(), succ, fail, params);
+            plt.runtime.ready(function() {
+                                     machine.params.currentDisplayer = function(MACHINE, v) {
+                                         params.currentDisplayer(v);
+                                     };
+                                     plt.runtime.invokeMains(machine,
+                                                             succ,
+                                                             function(MACHINE, e) {
+                                                                fail(e);
+                                                             });
+                              });
         });
 });
 EOF
                                ))))
   (lambda (suite-directory module-name)
     (let ([program
-           (let ([desugared-path 
-                  (build-path suite-directory (format "~a-desugared.sch" module-name))])
-             (cond [(file-exists? desugared-path)
-                    (make-SexpSource
-                     (cons 'begin (call-with-input-file* desugared-path read*)))]
+           (let ([path 
+                  (build-path suite-directory (format "~a-whalesong.rkt" module-name))])
+             (cond [(file-exists? path)
+                    (make-MainModuleSource (ModuleSource (normalize-path path)))]
                    [else
-                    (make-SexpSource (cons 'begin
-                                           (call-with-input-file* 
-                                               (build-path suite-directory
-                                                           (format "~a.sch" module-name))
-                                             read*)))]))])
+                    (error 'whalesong-runner "Couldn't find ~a" path)]))])
       (parameterize ([current-directory suite-directory])
         (let* ([result (evaluate program)])
           (make-measurement (current-seconds)
