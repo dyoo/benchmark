@@ -16,13 +16,13 @@
 (define (tak x y z)
   (if (not (< y x))
       z
-      (tak (tak (- x 1) y z)
-           (tak (- y 1) z x)
-           (tak (- z 1) x y))))
+      (tak (tak (sub1 x) y z)
+           (tak (sub1 y) z x)
+           (tak (sub1 z) x y))))
  
 ;;; call: (tak 18 12 6)
 (letrec ([loop (lambda (n v)
 		 (if (zero? n)
 		     (begin (display v) (newline))
-		     (loop (- n 1) (tak 18 12 6))))])
+		     (loop (sub1 n) (tak 18 12 6))))])
   (loop 1500 0))

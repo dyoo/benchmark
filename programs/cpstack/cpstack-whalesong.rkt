@@ -15,15 +15,15 @@
   (define (tak x y z k)
     (if (not (< y x))
         (k z)
-        (tak (- x 1)
+        (tak (sub1 x)
              y
              z
              (lambda (v1)
-               (tak (- y 1)
+               (tak (sub1 y)
                     z
                     x
                     (lambda (v2)
-                      (tak (- z 1)
+                      (tak (sub1 z)
                            x
                            y
                            (lambda (v3)
@@ -35,5 +35,5 @@
 (let loop ((n 20) (v 0))
   (if (zero? n)
       (begin (display v) (newline))
-      (loop (- n 1)
+      (loop (sub1 n)
 	    (cpstak 18 12 2))))

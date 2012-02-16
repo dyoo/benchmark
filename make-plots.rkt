@@ -367,9 +367,9 @@ EOF
             ))])))
 
 
-(define WEB-COLORS '(;"FFFFFF" ;; white
-                     ;"C0C0C0" ;; silver
-                     ;"808080" ;; gray
+(define WEB-COLORS '("FFFFFF" ;; white
+                     "C0C0C0" ;; silver
+                     "808080" ;; gray
                      "FF0000" ;; red
                      "FFFF00" ;; yellow
                      "808000" ;; olive
@@ -378,7 +378,7 @@ EOF
                      "0000FF" ;; blue
                      "800000" ;; maroon
                      "00FF00" ;; lime
-                     ;"00FFFF" ;; aqua
+                     "00FFFF" ;; aqua
                      "008080" ;; teal
 
                      "000080" ;; navy
