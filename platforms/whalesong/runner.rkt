@@ -1,8 +1,8 @@
 #lang racket/base
 (require "../../measurement-struct.rkt"
          "../../get-host-info.rkt"
-         (planet dyoo/whalesong/make/make-structs)
-         (planet dyoo/whalesong/js-assembler/package)
+         (planet dyoo/whalesong:1:15/make/make-structs)
+         (planet dyoo/whalesong:1:15/js-assembler/package)
          (planet dyoo/browser-evaluate)
          racket/runtime-path
          racket/path
@@ -59,7 +59,7 @@ EOF
            (let ([path 
                   (build-path suite-directory (format "~a-whalesong.rkt" module-name))])
              (cond [(file-exists? path)
-                    (make-MainModuleSource (ModuleSource (normalize-path path)))]
+                    (make-MainModuleSource (normalize-path path))]
                    [else
                     (error 'whalesong-runner "Couldn't find ~a" path)]))])
       (parameterize ([current-directory suite-directory])
