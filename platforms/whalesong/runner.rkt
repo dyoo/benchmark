@@ -56,9 +56,12 @@ EOF
                                ))))
   (lambda (suite-directory module-name)
     (let ([program
-           (let ([path 
+           (let ([path (build-path suite-directory (format "~a.rkt" module-name))]
+                 [whale-path 
                   (build-path suite-directory (format "~a-whalesong.rkt" module-name))])
-             (cond [(file-exists? path)
+             (cond [(file-exists? whale-path)
+                    (make-MainModuleSource (normalize-path whale-path))]
+                   [(file-exists? path)
                     (make-MainModuleSource (normalize-path path))]
                    [else
                     (error 'whalesong-runner "Couldn't find ~a" path)]))])

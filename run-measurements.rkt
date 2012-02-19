@@ -66,7 +66,9 @@
                            (make-program "programs/cpstack" 'cpstack)
                            (make-program "programs/tak" 'tak)
                            (make-program "programs/conform" 'conform)
-			   (make-program "programs/earley" 'earley)))
+			   (make-program "programs/earley" 'earley)
+                           (make-program "programs/dderiv" 'dderiv)
+                           ))
 
 (define (find-program name)
   (let loop ([programs all-programs])
