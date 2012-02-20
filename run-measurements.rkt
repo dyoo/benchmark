@@ -89,6 +89,7 @@
                                         peval
                                         puzzle
                                         sboyer
+                                        scheme
                                         )))
 
 (define (find-program name)
