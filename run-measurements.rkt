@@ -86,6 +86,7 @@
                                         nqueens
                                         nucleic2
                                         paraffins
+                                        peval
                                         )))
 
 (define (find-program name)
