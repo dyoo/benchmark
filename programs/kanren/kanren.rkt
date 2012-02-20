@@ -1,4 +1,4 @@
-#lang planet dyoo/whalesong
+#lang planet dyoo/whalesong/base
 (require (for-syntax racket/base))
 
 ;; smashed into benchmark form by Matthew

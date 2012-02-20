@@ -60,18 +60,25 @@
 
 (define-struct program (dir name))
 
-(define all-programs (list (make-program "programs/test" 'test)
-                           (make-program "programs/gauss" 'gauss)
-                           (make-program "programs/gauss-iter" 'gauss-iter)
-                           (make-program "programs/cpstack" 'cpstack)
-                           (make-program "programs/tak" 'tak)
-                           (make-program "programs/conform" 'conform)
-			   (make-program "programs/earley" 'earley)
-                           (make-program "programs/dderiv" 'dderiv)
-                           (make-program "programs/deriv" 'deriv)
-                           (make-program "programs/graphs" 'graphs)
-                           (make-program "programs/kanren" 'kanren)
-                           ))
+;; new-program: symbol -> program
+(define (new-program name)
+  (make-program (string-append "programs/" (symbol->string name))
+                name))
+
+;; These are all programs under the "programs/..." directory
+(define all-programs (map new-program '(test
+                                        gauss
+                                        gauss-iter
+                                        cpstack
+                                        tak
+                                        conform
+                                        earley
+                                        dderiv
+                                        deriv
+                                        graphs
+                                        kanren
+                                        lattice
+                                        )))
 
 (define (find-program name)
   (let loop ([programs all-programs])
