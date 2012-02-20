@@ -68,6 +68,7 @@
                            (make-program "programs/conform" 'conform)
 			   (make-program "programs/earley" 'earley)
                            (make-program "programs/dderiv" 'dderiv)
+                           (make-program "programs/deriv" 'deriv)
                            ))
 
 (define (find-program name)
