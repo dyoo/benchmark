@@ -84,6 +84,7 @@
                                         nestedloop
                                         nfa
                                         nqueens
+                                        nucleic2
                                         )))
 
 (define (find-program name)
