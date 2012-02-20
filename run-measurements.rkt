@@ -78,6 +78,10 @@
                                         graphs
                                         kanren
                                         lattice
+                                        lattice2
+                                        mazefun
+                                        nboyer
+                                        nestedloop
                                         )))
 
 (define (find-program name)
