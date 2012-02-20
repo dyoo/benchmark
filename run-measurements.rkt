@@ -87,6 +87,8 @@
                                         nucleic2
                                         paraffins
                                         peval
+                                        puzzle
+                                        sboyer
                                         )))
 
 (define (find-program name)
