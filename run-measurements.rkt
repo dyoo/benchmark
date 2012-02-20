@@ -82,6 +82,8 @@
                                         mazefun
                                         nboyer
                                         nestedloop
+                                        nfa
+                                        nqueens
                                         )))
 
 (define (find-program name)

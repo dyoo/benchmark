@@ -58,7 +58,7 @@
                                         (loop5 (+ i5 1) result)
                                         (loop6 (+ i6 1) (+ result 1)))))))))))))))
 
-(let ((cnt 18 ;; (if (with-input-from-file "input.txt" read) 18 1)
+(let ((cnt 10 ;; (if (with-input-from-file "input.txt" read) 18 1)
            ))
   (let loop ((n 20) (v 0))
           (if (zero? n)
