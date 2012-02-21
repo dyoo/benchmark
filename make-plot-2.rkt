@@ -41,32 +41,19 @@
                                                 (not (regexp-match #px"^test$" (first p)))))
                            (list (first p) (third p))))
 
+(define (halve l)
+  (define len (length l))
+  (values (take l (quotient len 2))
+          (drop l (quotient len 2))))
 
-(plot (histogram-with-points whalesong-points)
-      #:y-max (+ (apply max (map second whalesong-points)) 10)
-      #:title "Performance of the JS-based evaluator relative to Racket"
-      #:x-label "Programs"
-      #:y-label "X times slower than native Racket"
-      #:width 1200)
+(define (make-plot whalesong-points)
+  (plot (histogram-with-points whalesong-points)
+        #:y-max (+ (apply max (map second whalesong-points)) 10)
+        #:title "Performance of the JS-based evaluator relative to Racket"
+        #:x-label "Benchmark programs"
+        #:y-label "X times slower than native Racket"
+        #:width 1200))
 
-                             
-                             
-#;(plot (histogram-with-points '((gauss 50)
-                               (gauss-iter 60)
-                               (cpstack 40)))
-      #:y-max 70
-      
-      #:title "Performance of the JS-based evaluator relative to Racket"
-      #:x-label "Programs"
-      #:y-label "X times slower than native Racket"
-      )
-
-#;(plot (list (discrete-histogram (list (vector 'gauss (/ 9930. 129))
-                                      (vector 'gauss-iter (/ 11091 82.36))
-                                      (vector 'cpstack (/ 282492 4805.))))
-            (point-label (vector 0.5 (/ 9930. 129)) 
-                         (number->string (inexact->exact (floor (/ 9930. 129))))))
-      #:title "Performance of the JS-based evaluator relative to Racket"
-      #:x-label "Programs"
-      #:y-label "* times slower than native Racket")
-
+(let-values ([(first-half second-half) (halve whalesong-points)])
+  (list (make-plot first-half)
+        (make-plot second-half)))
