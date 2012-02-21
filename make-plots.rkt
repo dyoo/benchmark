@@ -16,6 +16,9 @@
          racket/pretty
          "measurement-struct.rkt")
 
+(provide (struct-out analyzed-point)
+         analyzed-points)
+
 
 (define plot-width 400)
 (define plot-height 400)
@@ -408,6 +411,7 @@ EOF
     (map (lambda (n)
            (exact->inexact (* (/ (- n min-val) width) 100)))
          numbers)))
+
 
 
 
