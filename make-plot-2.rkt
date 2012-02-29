@@ -58,7 +58,7 @@
   
   (define (make-plot whalesong-points)
     (plot (histogram-with-points whalesong-points)
-          #:y-max (max 200 (+ (apply max (map second whalesong-points)) 10))
+          #:y-max (max 300 (+ (apply max (map second whalesong-points)) 10))
           #:title "Performance of the JS-based evaluator relative to Racket"
           #:x-label "Benchmark programs"
           #:y-label "X times slower than native Racket"
