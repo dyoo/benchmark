@@ -28,6 +28,16 @@
      (max 0 (sub1 w))]
     [(key=? k "down")
      (add1 w)]
+    [(key=? k "1")
+     (+ w 1)]
+    [(key=? k "2")
+     (+ w 2)]
+    [(key=? k "3")
+     (+ w 3)]
+    [(key=? k "4")
+     (+ w 4)]
+    [(key=? k "u")
+     0]
     [else
      w]))
 
