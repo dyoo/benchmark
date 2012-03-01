@@ -32,7 +32,8 @@
                                         (map analyzed-point-day the-data)))))
         >))
     
-(define (make-plot/day [day 0])
+(define (make-plot/day [day 0]
+                       #:min-height (min-height 300))
   (define latest-points 
     (apply append
            (for/list ([class+data analyzed-points])
@@ -58,7 +59,7 @@
   
   (define (make-plot whalesong-points)
     (plot (histogram-with-points whalesong-points)
-          #:y-max (max 300 (+ (apply max (map second whalesong-points)) 10))
+          #:y-max (max min-height (+ (apply max (map second whalesong-points)) 10))
           #:title "Performance of the JS-based evaluator relative to Racket"
           #:x-label "Benchmark programs"
           #:y-label "X times slower than native Racket"
