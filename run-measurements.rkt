@@ -90,6 +90,7 @@
                                         puzzle
                                         sboyer
                                         scheme
+                                        triangle
                                         )))
 
 (define (find-program name)
