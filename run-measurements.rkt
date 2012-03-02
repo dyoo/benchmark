@@ -91,6 +91,7 @@
                                         sboyer
                                         scheme
                                         triangle
+                                        div
                                         )))
 
 (define (find-program name)
