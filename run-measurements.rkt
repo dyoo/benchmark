@@ -93,6 +93,7 @@
                                         scheme
                                         triangle
                                         div
+                                        ackermann
                                         )))
 
 (define (find-program name)
